@@ -53,7 +53,8 @@ import Polar
   , ExternalOp( ExternalOp, callId, args, operator )
   , GenericPolarRecord(GenericPolarRecord)
   , PolarError( PolarError )
-  , PolarErrorKind( ParseError )
+  , PolarErrorKind( ParseError, RuntimeError )
+  , PolarRuntimeError( ApplicationError )
   , PolarParseError( UnrecognizedEOF )
   , PolarTerm( BoolLit, StringLit, ListLit, ExpressionTerm, Variable, ExternalInstanceTerm, CallTerm )
   , PolarValue
@@ -257,6 +258,18 @@ main = hspec do
             $( shouldMatch
                  [e| polarNextQueryEvent query |]
                  [p| Right _ |] )
+
+  describe "Functional tests" do
+    before polarNew do
+      describe "External instances" do
+        it "correctly handles missing attributes" \polar -> do
+          expect =<< polarLoad polar [[s| test(u: User) if u.name == "Simon"; |]]
+
+          let user = User{ roles = [] }
+
+          $( shouldMatch
+               [e| S.toList $ runQuery polar (rule "test" user) |]
+               [p| [] :> Left (PolarError (RuntimeError ApplicationError{}) _) |] )
 
   describe "Examples" do
     before polarNew do

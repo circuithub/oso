@@ -99,6 +99,7 @@ data PolarErrorKind
   = ParseError PolarParseError
   | OperationalError PolarOperationalError
   | ValidationError PolarValidationError
+  | RuntimeError PolarRuntimeError
   deriving stock (Eq, Show)
 
 
@@ -107,6 +108,7 @@ instance FromJSON PolarErrorKind where
     [ ParseError <$> o .: "Parse"
     , OperationalError <$> o .: "Operational"
     , ValidationError <$> o .: "Validation"
+    , RuntimeError <$> o .: "Runtime"
     ]
 
 
@@ -148,6 +150,20 @@ instance FromJSON PolarValidationError where
     [ o .: "UnregisteredClass" >>= withObject "UnregisteredClass" \o -> do
         term <- o .: "term"
         pure $ UnregisteredClass term
+    ]
+
+
+data PolarRuntimeError = ApplicationError String String PolarTerm
+  deriving stock (Eq, Show)
+
+
+instance FromJSON PolarRuntimeError where
+  parseJSON = withObject "PolarRuntimeError" \o -> msum
+    [ o .: "Application" >>= withObject "Application" \o -> do
+        msg <- o .: "msg"
+        stackTrace <- o .: "stack_trace"
+        term <- o .: "term"
+        pure $ ApplicationError msg stackTrace term
     ]
 
 
@@ -264,6 +280,14 @@ polarCallResult query callId term = checkResultVoid do
   withQuery query \queryPtr ->
     withCString (LT.unpack (encodeToLazyText term)) \termPtr ->
       C.polar_call_result queryPtr callId termPtr
+
+
+polarApplicationError :: Query -> String -> IO (Either PolarError ())
+polarApplicationError query errorString = checkResultVoid do
+  withQuery query \queryPtr ->
+    withCString errorString \errorStringPtr ->
+      C.polar_application_error queryPtr errorStringPtr
+
 
 
 traverseNullPtr :: Applicative f
@@ -573,7 +597,14 @@ unfoldQuery env q = S.unfoldr go env where
                   flip runState env <$> call value attribute []
 
           case res of
-            Nothing  -> fail $ "Not handled: " <> attribute
+            Nothing  -> do
+              polarApplicationError q ("Cannot access " <> attribute) >>= \case
+                Left e -> pure $ Left $ Left e
+                Right () -> 
+                  polarCallResult q callId (StringLit "null") >>= \case
+                    Left e -> pure $ Left $ Left e
+                    Right () -> go env
+
             Just (res, env') -> do
               polarCallResult q callId res >>= \case
                 Left e -> pure $ Left $ Left e
