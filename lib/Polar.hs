@@ -21,7 +21,7 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Avoid lambda" #-}
 
-module Oso where
+module Polar where
 
 -- aeson
 import Data.Aeson

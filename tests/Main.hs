@@ -40,7 +40,7 @@ import Test.Hspec
   )
 
 -- oso
-import Oso
+import Polar
   ( Call( Call, args )
   , Done( Done, result )
   , Environment
