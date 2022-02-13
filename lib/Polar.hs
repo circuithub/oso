@@ -669,9 +669,20 @@ checkResultString io = do
      else Left . decodePolarError <$> peekCString errorPtr
 
 
+-- | Types that can be used in Polar rules.
 class (Eq a, Typeable a) => PolarValue a where
+  -- | Convert a Haskell value to a Polar term. Typically this will be
+  -- 'externalInstance', which essentially sends the value as a pointer.
   toPolarTerm :: a -> State Environment PolarTerm
-  call :: a -> String -> [PolarTerm] -> Maybe (State Environment PolarTerm)
+
+  -- | Handle attribute access or method calls. If the given value doesn't
+  -- support a method or attribute, 'Nothing' can be returned.
+  call 
+    :: a -- ^ The value to operate on.
+    -> String -- ^ The name of the attribute or method to access.
+    -> [PolarTerm] -- ^ Any arguments for the call (an empty list for attributes).
+    -> Maybe (State Environment PolarTerm)
+
   classTagOf :: a -> String
 
 

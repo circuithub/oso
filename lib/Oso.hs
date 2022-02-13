@@ -14,6 +14,11 @@ module Oso
     -- * Querying rules
   , isAllowed
 
+    -- * Marshalling to and from Polar
+  , registerType
+  , PolarValue(..)
+  , GenericPolarRecord(..)
+
     -- * Error handling
   , OsoError(..)
   ) where
@@ -24,7 +29,8 @@ import Control.Monad.IO.Class ( MonadIO, liftIO )
 import Data.Bifunctor ( first )
 
 -- oso
-import Polar ( Environment, Polar, PolarError, PolarTerm, PolarValue, polarClearRules, polarLoad, polarNew, rule, runQuery )
+-- oso
+import Polar ( Environment, Polar, PolarError, PolarTerm, PolarValue, polarClearRules, polarLoad, polarNew, rule, runQuery, GenericPolarRecord( GenericPolarRecord ), call, classTagOf, toPolarTerm, registerType )
 
 -- streaming
 import qualified Streaming.Prelude as S
