@@ -195,16 +195,16 @@ main = hspec do
     describe "polarLoad" do
       before polarNew do
         it "loads empty files" \polar ->
-          polarLoad polar ""
+          polarLoad polar [""]
             `shouldReturn` Right ()
 
         it "loads valid polar files" \polar ->
-          polarLoad polar "refl(x) if x == x;"
+          polarLoad polar ["refl(x) if x == x;"]
             `shouldReturn` Right ()
 
         it "returns errors on invalid files" \polar -> $(
           shouldMatch
-            [e| polarLoad polar "nonsense" |]
+            [e| polarLoad polar ["nonsense"] |]
             [p| Left (PolarError (ParseError UnrecognizedEOF{}) _) |] )
 
       describe "polarClearRules" do
@@ -228,7 +228,7 @@ main = hspec do
       xdescribe "polarNextInlineQuery" do
         before polarNew do
           it "returns the next inline query" \polar -> do
-            polarLoad polar "refl(x) if x == x;"
+            polarLoad polar ["refl(x) if x == x;"]
               `shouldReturn` Right ()
 
             $( shouldMatch
@@ -250,7 +250,7 @@ main = hspec do
       describe "polarNextQueryEvent" do
         before polarNew do
           it "returns the next query event" \polar -> do
-            expect =<< polarLoad polar "refl(x) if x == x;"
+            expect =<< polarLoad polar ["refl(x) if x == x;"]
 
             query <- expect =<< polarNewQuery polar "refl(42)" False
 
@@ -261,21 +261,21 @@ main = hspec do
   describe "Examples" do
     before polarNew do
       it "can load the first example" \polar -> do
-        polarLoad polar [s| father("Artemis", "Zeus"); |]
+        polarLoad polar [[s| father("Artemis", "Zeus"); |]]
           `shouldReturn` Right ()
 
       it "can load the second example" \polar -> do
         polarLoad polar
-          [s| father("Artemis", "Zeus");
-              father("Apollo", "Zeus");
-          |]
+          [[s| father("Artemis", "Zeus");
+               father("Apollo", "Zeus");
+           |]]
           `shouldReturn` Right ()
 
       it "can show that Zeus is the father of Artemis" \polar -> do
         polarLoad polar
-          [s| father("Artemis", "Zeus");
-              father("Apollo", "Zeus");
-          |]
+          [[s| father("Artemis", "Zeus");
+               father("Apollo", "Zeus");
+           |]]
           `shouldReturn` Right ()
 
         query <- expect =<< polarNewQuery polar [s| father("Artemis", "Zeus") |] False
@@ -285,9 +285,9 @@ main = hspec do
 
       it "can find all children of Zeus" \polar -> do
         polarLoad polar
-          [s| father("Artemis", "Zeus");
-              father("Apollo", "Zeus");
-          |]
+          [[s| father("Artemis", "Zeus");
+               father("Apollo", "Zeus");
+           |]]
           `shouldReturn` Right ()
 
         query <- expect =<< polarNewQuery polar [s| father(child, "Zeus") |] False
@@ -305,11 +305,11 @@ main = hspec do
 
       it "can find the grandfather of Ascelpius" \polar -> do
         polarLoad polar
-          [s| father("Artemis", "Zeus");
-              father("Apollo", "Zeus");
-              father("Asclepius", "Apollo");
-              grandfather(a, b) if father(a, anyPerson) and father(anyPerson, b);
-          |]
+          [[s| father("Artemis", "Zeus");
+               father("Apollo", "Zeus");
+               father("Asclepius", "Apollo");
+               grandfather(a, b) if father(a, anyPerson) and father(anyPerson, b);
+           |]]
           `shouldReturn` Right ()
 
         query <- expect =<< polarNewQuery polar [s| grandfather("Asclepius", grandpa) |] False
@@ -324,7 +324,7 @@ main = hspec do
       describe "External instances" do
         it "can lookup fields on external instances" \polar -> do
           expect =<< polarLoad polar
-            [s| foo(o: Organization) if o.name == "Test"; |]
+            [[s| foo(o: Organization) if o.name == "Test"; |]]
 
           let o = Organization{ name = "Test" }
 
@@ -334,7 +334,7 @@ main = hspec do
 
         it "can fail to search when using external instances" \polar -> do
           expect =<< polarLoad polar
-            [s| foo(o: Organization) if o.name == "Test"; |]
+            [[s| foo(o: Organization) if o.name == "Test"; |]]
 
           let o = Organization{ name = "Not test" }
 
@@ -349,41 +349,41 @@ main = hspec do
               expect =<< registerType @Repository polar
 
               expect =<< polarLoad polar
-                [s|
-                  allow(actor, action, resource) if
-                    has_permission(actor, action, resource);
+                [[s|
+                   allow(actor, action, resource) if
+                     has_permission(actor, action, resource);
 
-                  has_role(user: User, name: String, resource: Resource) if
-                    role in user.roles and
-                    role.name = name and
-                    role.resource = resource;
+                   has_role(user: User, name: String, resource: Resource) if
+                     role in user.roles and
+                     role.name = name and
+                     role.resource = resource;
 
-                  actor User {}
+                   actor User {}
 
-                  resource Organization {
-                    roles = ["owner"];
-                  }
+                   resource Organization {
+                     roles = ["owner"];
+                   }
 
-                  resource Repository {
-                    permissions = ["read", "push"];
-                    roles = ["contributor", "maintainer"];
-                    relations = { parent: Organization };
+                   resource Repository {
+                     permissions = ["read", "push"];
+                     roles = ["contributor", "maintainer"];
+                     relations = { parent: Organization };
 
-                    # An actor has the "read" permission if they have the "contributor" role.
-                    "read" if "contributor";
-                    # An actor has the "push" permission if they have the "maintainer" role.
-                    "push" if "maintainer";
+                     # An actor has the "read" permission if they have the "contributor" role.
+                     "read" if "contributor";
+                     # An actor has the "push" permission if they have the "maintainer" role.
+                     "push" if "maintainer";
 
-                    # An actor has the "contributor" role if they have the "maintainer" role.
-                    "contributor" if "maintainer";
+                     # An actor has the "contributor" role if they have the "maintainer" role.
+                     "contributor" if "maintainer";
 
-                    # An actor has the "maintainer" role if they have the "owner" role on the "parent" Organization.
-                    "maintainer" if "owner" on "parent";
-                  }
+                     # An actor has the "maintainer" role if they have the "owner" role on the "parent" Organization.
+                     "maintainer" if "owner" on "parent";
+                   }
 
-                  has_relation(organization: Organization, "parent", repository: Repository) if
-                    organization = repository.organization;
-                |]
+                   has_relation(organization: Organization, "parent", repository: Repository) if
+                     organization = repository.organization;
+                 |]]
 
               return polar
 

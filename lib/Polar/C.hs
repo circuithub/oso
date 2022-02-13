@@ -1,19 +1,46 @@
 {-# language QuasiQuotes #-}
 {-# language TemplateHaskell #-}
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
+{-# options_ghc -Wno-unrecognised-pragmas #-}
+
 {-# HLINT ignore "Use camelCase" #-}
 
 module Polar.C
   ( polar_new
   , polar_load
-  , polar_clear_rules, polar_register_constant, polar_register_mro, polar_next_inline_query, polar_new_query_from_term, polar_new_query, polar_next_polar_mesage, polar_next_query_event, polar_debug_command, polar_call_result, polar_application_error, polar_question_result, polar_next_query_message, polar_query_surce_info, polar_bind, polar_get_external_id, polar_free, query_free, result_free) where
+  , polar_clear_rules
+  , polar_register_constant
+  , polar_register_mro
+  , polar_next_inline_query
+  , polar_new_query_from_term
+  , polar_new_query
+  , polar_next_polar_mesage
+  , polar_next_query_event
+  , polar_debug_command
+  , polar_call_result
+  , polar_application_error
+  , polar_question_result
+  , polar_next_query_message
+  , polar_query_surce_info
+  , polar_bind
+  , polar_get_external_id
+  , polar_free
+  , query_free
+  , result_free
+  ) where
 
+-- 
 import Polar.C.Context ( polarCtx )
-import Foreign.Ptr (Ptr, FunPtr)
+import Polar.C.Types ( CResult_Query, CResult_c_char, CResult_c_void, Polar, Query )
+
+-- base
+import Data.Int ( Int32 )
+import Data.Word ( Word32, Word64 )
+import Foreign.Ptr ( FunPtr, Ptr )
+
+-- inline-c
 import qualified Language.C.Inline as C
-import Polar.C.Types ( Polar, CResult_c_void, Query, CResult_Query, CResult_c_char )
-import Data.Word (Word64, Word32)
-import Data.Int (Int32)
+
 
 C.context (C.baseCtx <> polarCtx)
 
@@ -39,7 +66,7 @@ polar_load polarPtr srcPtr =
 
 
 polar_clear_rules :: Ptr Polar -> IO (Ptr CResult_c_void)
-polar_clear_rules polarPtr = 
+polar_clear_rules polarPtr =
   [C.exp| polar_CResult_c_void* { 
     polar_clear_rules($(polar_Polar* polarPtr))
   } |]
@@ -57,7 +84,7 @@ polar_register_constant polarPtr namePtr valuePtr =
 
 
 polar_register_mro :: Ptr Polar -> Ptr C.CChar -> Ptr C.CChar -> IO (Ptr CResult_c_void)
-polar_register_mro polarPtr namePtr valuePtr = 
+polar_register_mro polarPtr namePtr valuePtr =
   [C.exp| polar_CResult_c_void* { 
     polar_register_mro(
       $(polar_Polar* polarPtr), 
@@ -100,7 +127,7 @@ polar_new_query polarPtr queryPtr traceInt =
 
 
 polar_next_polar_mesage :: Ptr Polar -> IO (Ptr CResult_c_char)
-polar_next_polar_mesage polarPtr = 
+polar_next_polar_mesage polarPtr =
   [C.exp| polar_CResult_c_char * {
     polar_next_polar_message($(polar_Polar* polarPtr))
   } |]
@@ -190,7 +217,7 @@ polar_free = [C.funPtr| void hs_polar_free(polar_Polar* polar) { polar_free(pola
 
 
 query_free :: FunPtr (Ptr Query -> IO ())
-query_free = 
+query_free =
   [C.funPtr| void hs_query_free(polar_Query* query) { query_free(query); } |]
 
 

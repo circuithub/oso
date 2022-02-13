@@ -9,9 +9,11 @@ import qualified Data.Map.Strict as Map
 
 -- inline-c
 import Language.C.Inline as C ( Context )
-import Language.C.Inline.Context ( Context(ctxTypesTable) )
-import Language.C.Types ( TypeSpecifier(TypeName) )
-import Polar.C.Types ( Polar, CResult_c_void, Query, CResult_Query, CResult_c_char )
+import Language.C.Inline.Context ( Context( ctxTypesTable ) )
+import Language.C.Types ( TypeSpecifier( TypeName ) )
+
+-- oso
+import Polar.C.Types ( CResult_Query, CResult_c_char, CResult_c_void, Polar, Query )
 
 
 polarCtx :: Context

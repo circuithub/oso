@@ -18,7 +18,9 @@
 {-# language TypeApplications #-}
 {-# language TypeOperators #-}
 {-# language UndecidableInstances #-}
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
+{-# options_ghc -Wno-unrecognised-pragmas #-}
+
 {-# HLINT ignore "Avoid lambda" #-}
 
 module Polar where
@@ -42,21 +44,27 @@ import Control.Applicative ( (<|>), empty )
 import Control.Exception ( Exception, finally )
 import Control.Monad.IO.Class ( liftIO )
 import Data.Bool ( bool )
-import Data.Foldable ( msum )
+import Data.Data ( Proxy( Proxy ) )
+import Data.Foldable ( msum, toList )
+import Data.Functor ( (<&>) )
 import Data.IORef ( IORef, atomicModifyIORef, newIORef, readIORef )
 import Data.Type.Equality ( (:~:)( Refl ), testEquality )
 import Data.Word ( Word64 )
 import Foreign.C ( CChar, peekCString, withCString )
-import Foreign.Ptr ( Ptr, nullPtr, castPtr )
+import Foreign.ForeignPtr ( ForeignPtr, newForeignPtr, withForeignPtr )
+import Foreign.Ptr ( Ptr, castPtr, nullPtr )
 import Foreign.Storable ( peekByteOff, sizeOf )
-import GHC.Generics ( Generic, from, Rep, D1, M1 (M1), C1, S1, Meta (MetaSel), Rec0, K1 (K1), type (:*:) ((:*:)) )
+import GHC.Generics ( C1, D1, Generic, K1( K1 ), M1( M1 ), Meta( MetaSel ), Rec0, Rep, S1, type (:*:)( (:*:) ), from )
+import GHC.TypeLits ( KnownSymbol, symbolVal )
 import Type.Reflection ( SomeTypeRep( SomeTypeRep ), Typeable, typeOf, typeRep )
 
 -- containers
 import Data.Map.Strict ( Map )
 import qualified Data.Map.Strict as Map
 
--- inline-c
+-- oso
+import qualified Polar.C as C
+import qualified Polar.C.Types as C
 
 -- streaming
 import Data.Functor.Of ( Of )
@@ -70,11 +78,6 @@ import qualified Data.Text.Lazy as LT
 
 -- transformers
 import Control.Monad.Trans.State.Strict ( State, runState, state )
-import GHC.TypeLits (symbolVal, KnownSymbol)
-import Data.Data (Proxy(Proxy))
-import qualified Polar.C.Types as C
-import qualified Polar.C as C
-import Foreign.ForeignPtr (ForeignPtr, newForeignPtr, withForeignPtr)
 
 
 data PolarError
@@ -168,13 +171,13 @@ polarNew = do
   return Polar{ polarPtr = polarForeignPtr, environmentRef }
 
 
-polarLoad :: Polar -> String -> IO (Either PolarError ())
-polarLoad polar src = checkResultVoid do
+polarLoad :: (Foldable f) => Polar -> f Text -> IO (Either PolarError ())
+polarLoad polar srcs = checkResultVoid do
   withPolar polar \polarPtr ->
-    withCString srcs \srcsPtr ->
+    withCString json \srcsPtr ->
       C.polar_load polarPtr srcsPtr
   where
-    srcs = LT.unpack $ encodeToLazyText [aesonQQ|[{"src": #{src}}]|]
+    json = LT.unpack $ encodeToLazyText $ toList srcs <&> \src -> [aesonQQ|{"src": #{src}}|]
 
 
 polarClearRules :: Polar -> IO (Either PolarError ())
