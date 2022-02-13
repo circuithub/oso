@@ -1,9 +1,11 @@
 {-# language AllowAmbiguousTypes #-}
 {-# language BlockArguments #-}
+{-# language DataKinds #-}
 {-# language DeriveAnyClass #-}
 {-# language DeriveGeneric #-}
 {-# language DerivingStrategies #-}
 {-# language DuplicateRecordFields #-}
+{-# language FlexibleContexts #-}
 {-# language FlexibleInstances #-}
 {-# language GADTs #-}
 {-# language LambdaCase #-}
@@ -13,19 +15,22 @@
 {-# language QuasiQuotes #-}
 {-# language ScopedTypeVariables #-}
 {-# language StandaloneDeriving #-}
-{-# language TemplateHaskell #-}
 {-# language TypeApplications #-}
+{-# language TypeOperators #-}
+{-# language UndecidableInstances #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Avoid lambda" #-}
 
 module Oso where
 
 -- aeson
-import Data.Aeson 
+import Data.Aeson
   ( FromJSON( parseJSON )
   , ToJSON( toJSON )
   , (.:)
   , eitherDecodeStrict'
   , withObject
-  , withText 
+  , withText
   )
 import Data.Aeson.Text ( encodeToLazyText )
 
@@ -34,17 +39,17 @@ import Data.Aeson.QQ ( aesonQQ )
 
 -- base
 import Control.Applicative ( (<|>), empty )
-import Control.Exception ( Exception )
+import Control.Exception ( Exception, finally )
 import Control.Monad.IO.Class ( liftIO )
 import Data.Bool ( bool )
 import Data.Foldable ( msum )
 import Data.IORef ( IORef, atomicModifyIORef, newIORef, readIORef )
 import Data.Type.Equality ( (:~:)( Refl ), testEquality )
 import Data.Word ( Word64 )
-import Foreign.C ( CChar, CInt( CInt ), peekCString, withCString )
-import Foreign.Ptr ( Ptr, nullPtr )
+import Foreign.C ( CChar, peekCString, withCString )
+import Foreign.Ptr ( Ptr, nullPtr, castPtr )
 import Foreign.Storable ( peekByteOff, sizeOf )
-import GHC.Generics ( Generic )
+import GHC.Generics ( Generic, from, Rep, D1, M1 (M1), C1, S1, Meta (MetaSel), Rec0, K1 (K1), type (:*:) ((:*:)) )
 import Type.Reflection ( SomeTypeRep( SomeTypeRep ), Typeable, typeOf, typeRep )
 
 -- containers
@@ -52,10 +57,6 @@ import Data.Map.Strict ( Map )
 import qualified Data.Map.Strict as Map
 
 -- inline-c
-import qualified Language.C.Inline as C
-
--- oso
-import Context ( CPolar, CQuery, CResultQuery, CResultString, CResultVoid, polarCtx )
 
 -- streaming
 import Data.Functor.Of ( Of )
@@ -69,21 +70,11 @@ import qualified Data.Text.Lazy as LT
 
 -- transformers
 import Control.Monad.Trans.State.Strict ( State, runState, state )
-
-
-C.context (C.baseCtx <> polarCtx)
-
-
-C.include "stdint.h"
-
-
-C.include "polar.h"
-
-
-data Polar = Polar
-  { polarPtr :: Ptr CPolar
-  , environmentRef :: IORef Environment
-  }
+import GHC.TypeLits (symbolVal, KnownSymbol)
+import Data.Data (Proxy(Proxy))
+import qualified Polar.C.Types as C
+import qualified Polar.C as C
+import Foreign.ForeignPtr (ForeignPtr, newForeignPtr, withForeignPtr)
 
 
 data PolarError
@@ -157,130 +148,105 @@ instance FromJSON PolarValidationError where
     ]
 
 
+data Polar = Polar
+  { polarPtr :: ForeignPtr C.Polar
+  , environmentRef :: IORef Environment
+  }
+
+
+withPolar :: Polar -> (Ptr C.Polar -> IO a) -> IO a
+withPolar Polar{ polarPtr } = withForeignPtr polarPtr
+
+
 polarNew :: IO Polar
 polarNew = do
-  polarPtr <- [C.exp| polar_Polar* { polar_new() } |]
+  polarPtr <- C.polar_new
   environmentRef <- newIORef emptyEnvironment
-  return Polar{ polarPtr, environmentRef }
+
+  polarForeignPtr <- newForeignPtr C.polar_free polarPtr
+
+  return Polar{ polarPtr = polarForeignPtr, environmentRef }
 
 
 polarLoad :: Polar -> String -> IO (Either PolarError ())
-polarLoad Polar{ polarPtr } src =
-  checkResultVoid do
-    withCString srcs \srcPtr ->
-      [C.exp| polar_CResult_c_void* { 
-        polar_load(
-          $(polar_Polar* polarPtr), 
-          $(char* srcPtr)
-        ) 
-      } |]
+polarLoad polar src = checkResultVoid do
+  withPolar polar \polarPtr ->
+    withCString srcs \srcsPtr ->
+      C.polar_load polarPtr srcsPtr
   where
     srcs = LT.unpack $ encodeToLazyText [aesonQQ|[{"src": #{src}}]|]
 
 
 polarClearRules :: Polar -> IO (Either PolarError ())
-polarClearRules Polar{ polarPtr } =
-  checkResultVoid do
-    [C.exp| polar_CResult_c_void* { 
-      polar_clear_rules($(polar_Polar* polarPtr))
-    } |]
+polarClearRules polar = checkResultVoid do
+  withPolar polar \polarPtr ->
+    C.polar_clear_rules polarPtr
 
 
 polarRegisterConstant :: Polar -> String -> PolarTerm -> IO (Either PolarError ())
-polarRegisterConstant Polar{ polarPtr } name value =
-  checkResultVoid do
+polarRegisterConstant polar name value = checkResultVoid do
+  withPolar polar \polarPtr ->
     withCString name \namePtr ->
       withCString (LT.unpack (encodeToLazyText value)) \valuePtr ->
-        [C.exp| polar_CResult_c_void* { 
-          polar_register_constant(
-            $(polar_Polar* polarPtr), 
-            $(char* namePtr), 
-            $(char* valuePtr)
-          ) 
-        } |]
+        C.polar_register_constant polarPtr namePtr valuePtr
 
 
 polarRegisterMro :: Polar -> String -> String -> IO (Either PolarError ())
-polarRegisterMro Polar{ polarPtr } name value =
-  checkResultVoid do
+polarRegisterMro polar name value = checkResultVoid do
+  withPolar polar \polarPtr ->
     withCString name \namePtr ->
       withCString value \valuePtr ->
-        [C.exp| polar_CResult_c_void* { 
-          polar_register_mro(
-            $(polar_Polar* polarPtr), 
-            $(char* namePtr), 
-            $(char* valuePtr)
-          ) 
-        } |]
+        C.polar_register_mro polarPtr namePtr valuePtr
 
 
 polarNextInlineQuery :: Polar -> Bool -> IO (Maybe Query)
-polarNextInlineQuery Polar{ polarPtr } trace =
-  traverseNullPtr (return . Query) =<<
-    [C.exp| polar_Query* { 
-      polar_next_inline_query(
-        $(polar_Polar* polarPtr), 
-        $(int traceInt)
-      ) 
-    } |]
+polarNextInlineQuery polar trace =
+  withPolar polar \polarPtr ->
+    C.polar_next_inline_query polarPtr traceInt >>= traverseNullPtr \ptr -> do
+      Query <$> newForeignPtr C.query_free ptr
   where
     traceInt = bool 0 1 trace
 
 
-newtype Query = Query (Ptr CQuery)
+newtype Query = Query (ForeignPtr C.Query)
   deriving stock Show
 
 
+withQuery :: Query -> (Ptr C.Query -> IO a) -> IO a
+withQuery (Query ptr) = withForeignPtr ptr
+
+
 polarNewQuery :: Polar -> String -> Bool -> IO (Either PolarError Query)
-polarNewQuery Polar{ polarPtr } query trace =
-  checkResultQuery do
+polarNewQuery polar query trace = checkResultQuery do
+  withPolar polar \polarPtr ->
     withCString query \queryPtr ->
-      [C.exp| polar_CResult_Query* { 
-        polar_new_query(
-          $(polar_Polar* polarPtr), 
-          $(char* queryPtr), 
-          $(int traceInt)
-        ) 
-      } |]
+      C.polar_new_query polarPtr queryPtr traceInt
   where
     traceInt = bool 0 1 trace
 
 
 polarNewQueryFromTerm :: Polar -> PolarTerm -> Bool -> IO (Either PolarError Query)
-polarNewQueryFromTerm Polar{ polarPtr } term trace =
-  checkResultQuery do
+polarNewQueryFromTerm polar term trace = checkResultQuery do
+  withPolar polar \polarPtr ->
     withCString (LT.unpack (encodeToLazyText term)) \queryPtr ->
-      [C.exp| polar_CResult_Query* { 
-        polar_new_query_from_term(
-          $(polar_Polar* polarPtr), 
-          $(char* queryPtr), 
-          $(int traceInt)
-        ) 
-      } |]
+      C.polar_new_query_from_term polarPtr queryPtr traceInt
   where
     traceInt = bool 0 1 trace
 
 
 polarQuestionResult :: Query -> Word64 -> Bool -> IO (Either PolarError ())
-polarQuestionResult (Query queryPtr) callId yn =
-  checkResultVoid do
-    [C.exp| polar_CResult_c_void * {
-      polar_question_result(
-        $(polar_Query *queryPtr),
-        $(uint64_t callId),
-        $(int32_t c'yn)
-      )
-    } |]
+polarQuestionResult query callId yn = checkResultVoid do
+  withQuery query \queryPtr ->
+    C.polar_question_result queryPtr callId c'yn
   where
     c'yn = bool 0 1 yn
 
 
 polarNextQueryEvent :: Query -> IO (Either PolarError QueryEvent)
-polarNextQueryEvent (Query queryPtr) = do
+polarNextQueryEvent query = do
   res <- checkResultString do
-    [C.exp| polar_CResult_c_char* { 
-      polar_next_query_event($(polar_Query* queryPtr)) 
-    } |]
+    withQuery query \queryPtr ->
+      C.polar_next_query_event queryPtr
 
   case res of
     Left e -> pure (Left e)
@@ -291,16 +257,10 @@ polarNextQueryEvent (Query queryPtr) = do
 
 
 polarCallResult :: Query -> Word64 -> PolarTerm -> IO (Either PolarError ())
-polarCallResult (Query queryPtr) callId term =
-  checkResultVoid do
+polarCallResult query callId term = checkResultVoid do
+  withQuery query \queryPtr ->
     withCString (LT.unpack (encodeToLazyText term)) \termPtr ->
-      [C.exp| polar_CResult_c_void* { 
-        polar_call_result(
-          $(polar_Query* queryPtr), 
-          $(uint64_t callId), 
-          $(char *termPtr)
-        ) 
-      } |]
+      C.polar_call_result queryPtr callId termPtr
 
 
 traverseNullPtr :: Applicative f
@@ -520,14 +480,13 @@ data Environment = Environment
   { instanceMap :: Map Word64 Instance
   , types :: Map SomeTypeRep Word64
   }
-  deriving stock Show
 
 
 emptyEnvironment :: Environment
 emptyEnvironment = Environment mempty mempty
 
 
-externalInstance :: (PolarValue a, Show a) => a -> State Environment PolarTerm
+externalInstance :: PolarValue a => a -> State Environment PolarTerm
 externalInstance a = state \environment -> do
   let i = maybe 0 (succ . fst) (Map.lookupMax (instanceMap environment))
 
@@ -547,7 +506,7 @@ externalInstance a = state \environment -> do
 
 data Instance where
   Instance
-    :: (PolarValue a, Show a)
+    :: PolarValue a
     => { value :: a }
     -> Instance
 
@@ -559,14 +518,9 @@ instance Eq Instance where
      Just Refl -> valueA == valueB
 
 
-instance Show Instance where
-  show Instance{ value } = show value
-
-
 runQuery :: Polar -> State Environment PolarTerm -> Stream (Of Result) IO (Either PolarError Bool)
 runQuery polar queryBuilder = do
   environment <- liftIO (readIORef (environmentRef polar))
-  let environment = emptyEnvironment
 
   let (queryTerm, env) = runState queryBuilder environment
 
@@ -597,20 +551,14 @@ unfoldQuery env q = S.unfoldr go env where
             Nothing -> fail "Could not find instance (1)"
             Just x -> return x
 
-          polarQuestionResult q callId (classTagOf x == y)
-          go env
+          polarQuestionResult q callId (classTagOf x == y) >>= \case
+            Left e -> pure $ Left $ Left e
+            Right () -> go env
 
         ExternalIsaEvent ExternalIsa{ callId, instance_ = StringLit{}, classTag = "String" } -> do
-          polarQuestionResult q callId True
-          go env
-
-        ExternalIsSubclassEvent ExternalIsSubclass{ callId } -> do
-          polarQuestionResult q callId False
-          go env
-
-        ExternalIsaWithPathEvent ExternalIsaWithPath{ callId } -> do
-          polarQuestionResult q callId False
-          go env
+          polarQuestionResult q callId True >>= \case
+            Left e -> pure $ Left $ Left e
+            Right () -> go env
 
         ExternalCallEvent ExternalCall{ callId, instance_ = ExternalInstanceTerm ExternalInstance{ instanceId }, attribute } -> do
           x <- case Map.lookup instanceId (instanceMap env) of
@@ -624,8 +572,9 @@ unfoldQuery env q = S.unfoldr go env where
           case res of
             Nothing  -> fail $ "Not handled: " <> attribute
             Just (res, env') -> do
-              polarCallResult q callId res
-              go env'
+              polarCallResult q callId res >>= \case
+                Left e -> pure $ Left $ Left e
+                Right () -> go env'
 
         ExternalOpEvent ExternalOp{ callId, operator = "Eq", args = [ExternalInstanceTerm ExternalInstance{ instanceId = l }, ExternalInstanceTerm ExternalInstance{ instanceId = r }] } -> do
           x <- case Map.lookup l (instanceMap env) of
@@ -636,10 +585,9 @@ unfoldQuery env q = S.unfoldr go env where
             Nothing -> fail "Could not find r instance"
             Just y -> return y
 
-          polarQuestionResult q callId (x == y)
-          go env
-
-        x -> fail $ show x
+          polarQuestionResult q callId (x == y) >>= \case
+            Left e -> pure $ Left $ Left e
+            Right () -> go env
 
 
 decodePolarError :: String -> PolarError
@@ -649,36 +597,42 @@ decodePolarError json =
     Right a -> a
 
 
-checkResultVoid :: IO (Ptr CResultVoid) -> IO (Either PolarError ())
+checkResultVoid :: IO (Ptr C.CResult_c_void) -> IO (Either PolarError ())
 checkResultVoid io = do
   ptr <- io
-  errorPtr  <- peekByteOff ptr (sizeOf (undefined :: Ptr CChar))
 
-  if errorPtr == nullPtr @CChar
-   then return $ Right ()
-   else Left . decodePolarError <$> peekCString errorPtr
+  flip finally (C.result_free ptr) do
+    errorPtr  <- peekByteOff ptr (sizeOf (undefined :: Ptr CChar))
+
+    if errorPtr == nullPtr @CChar
+     then return $ Right ()
+     else Left . decodePolarError <$> peekCString errorPtr
 
 
-checkResultQuery :: IO (Ptr CResultQuery) -> IO (Either PolarError Query)
+checkResultQuery :: IO (Ptr C.CResult_Query) -> IO (Either PolarError Query)
 checkResultQuery io = do
   ptr <- io
-  resultPtr <- peekByteOff ptr 0
-  errorPtr  <- peekByteOff ptr (sizeOf (undefined :: Ptr CChar))
 
-  if errorPtr == nullPtr @CChar
-   then return $ Right (Query resultPtr)
-   else Left . decodePolarError <$> peekCString errorPtr
+  flip finally (C.result_free (castPtr ptr)) do
+    resultPtr <- peekByteOff ptr 0
+    errorPtr  <- peekByteOff ptr (sizeOf (undefined :: Ptr CChar))
+
+    if errorPtr == nullPtr @CChar
+     then Right . Query <$> newForeignPtr C.query_free resultPtr
+     else Left . decodePolarError <$> peekCString errorPtr
 
 
-checkResultString :: IO (Ptr CResultString) -> IO (Either PolarError String)
+checkResultString :: IO (Ptr C.CResult_c_char) -> IO (Either PolarError String)
 checkResultString io = do
   ptr <- io
-  resultPtr <- peekByteOff ptr 0
-  errorPtr  <- peekByteOff ptr (sizeOf (undefined :: Ptr CChar))
 
-  if errorPtr == nullPtr @CChar
-   then Right <$> peekCString resultPtr
-   else Left . decodePolarError <$> peekCString errorPtr
+  flip finally (C.result_free (castPtr ptr)) do
+    resultPtr <- peekByteOff ptr 0
+    errorPtr  <- peekByteOff ptr (sizeOf (undefined :: Ptr CChar))
+
+    if errorPtr == nullPtr @CChar
+     then Right <$> peekCString resultPtr
+     else Left . decodePolarError <$> peekCString errorPtr
 
 
 class (Eq a, Typeable a) => PolarValue a where
@@ -747,3 +701,37 @@ registerType polar = do
       (environment', term)
 
   polarRegisterConstant polar (show (typeRep @a)) instance_
+
+
+-- | A deriving-via wrapper type to derive 'PolarValue' instances for record types.
+newtype GenericPolarRecord a = GenericPolarRecord a
+  deriving stock (Eq, Show)
+
+
+instance (GPolarFields (Rep a), Generic a, Eq a, Typeable a) => PolarValue (GenericPolarRecord a) where
+  toPolarTerm = externalInstance
+
+  call (GenericPolarRecord x) = gcall (from x)
+
+  classTagOf _ = show (typeRep @a)
+
+
+class GPolarFields f where
+  gcall :: f x -> String -> [PolarTerm] -> Maybe (State Environment PolarTerm)
+
+
+instance GPolarFields f => GPolarFields (D1 m f) where
+  gcall (M1 a) = gcall a
+
+
+instance GPolarFields f => GPolarFields (C1 m f) where
+  gcall (M1 a) = gcall a
+
+
+instance (GPolarFields l, GPolarFields r) => GPolarFields (l :*: r) where
+  gcall (l :*: r) name args = gcall l name args <|> gcall r name args
+
+
+instance (KnownSymbol name, PolarValue x) => GPolarFields (S1 ('MetaSel ('Just name) a b c) (Rec0 x)) where
+  gcall (M1 (K1 a)) n [] | n == symbolVal (Proxy @name) = Just $ toPolarTerm a
+  gcall (M1 _) _ _  = Nothing

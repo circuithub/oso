@@ -1,5 +1,6 @@
 {-# language BlockArguments #-}
-{-# language DerivingStrategies #-}
+{-# language DeriveGeneric #-}
+{-# language DerivingVia #-}
 {-# language DuplicateRecordFields #-}
 {-# language LambdaCase #-}
 {-# language NamedFieldPuns #-}
@@ -17,6 +18,7 @@ import Data.Aeson.Types ( Result( Success ), fromJSON )
 
 -- base
 import Control.Exception ( Exception, throw )
+import GHC.Generics ( Generic )
 import Type.Reflection ()
 
 -- containers
@@ -49,6 +51,7 @@ import Oso
   , ExternalIsa( ExternalIsa, callId, instance_, classTag )
   , ExternalIsaWithPath( ExternalIsaWithPath, callId )
   , ExternalOp( ExternalOp, callId, args, operator )
+  , GenericPolarRecord(GenericPolarRecord)
   , PolarError( PolarError )
   , PolarErrorKind( ParseError )
   , PolarParseError( UnrecognizedEOF )
@@ -56,10 +59,7 @@ import Oso
   , PolarValue
   , QueryEvent( ResultEvent, DoneEvent, ExternalIsaEvent, ExternalIsSubclassEvent, ExternalIsaWithPathEvent, ExternalCallEvent, ExternalOpEvent )
   , Result( Result, bindings, trace )
-  , call
-  , classTagOf
   , emptyEnvironment
-  , externalInstance
   , instanceId
   , name
   , polarClearRules
@@ -73,7 +73,6 @@ import Oso
   , registerType
   , rule
   , runQuery
-  , toPolarTerm
   , unfoldQuery
   )
 import ShouldMatch ( shouldMatch )
@@ -420,59 +419,30 @@ main = hspec do
 newtype User = User
   { roles :: [Role]
   }
-  deriving stock (Eq, Show)
-
-
-instance PolarValue User where
-  toPolarTerm = externalInstance
-  call User{ roles } = \case
-    "roles" -> \_ -> Just $ toPolarTerm roles
-    _ -> \_ -> Nothing
-  classTagOf _ = "User"
+  deriving stock (Eq, Generic, Show)
+  deriving PolarValue via GenericPolarRecord User
 
 
 data Role = Role
   { name :: Text
   , resource :: Organization
   }
-  deriving stock (Eq, Show)
-
-
-instance PolarValue Role where
-  toPolarTerm = externalInstance
-  call Role{ name, resource } = \case
-    "name" -> \_ -> Just $ toPolarTerm name
-    "resource" -> \_ -> Just $ toPolarTerm resource
-    _ -> \_ -> Nothing
-  classTagOf _ = "Role"
+  deriving stock (Eq, Generic, Show)
+  deriving PolarValue via GenericPolarRecord Role
 
 
 data Repository = Repository
   { name :: Text
   , organization :: Organization
   }
-  deriving stock (Eq, Show)
-
-
-instance PolarValue Repository where
-  toPolarTerm = externalInstance
-  call Repository{ name } "name" _ = Just $ toPolarTerm name
-  call Repository{ organization } "organization" _ = Just $ toPolarTerm organization
-  call _                  _      _ = Nothing
-  classTagOf _ = "Repository"
+  deriving stock (Eq, Generic, Show)
+  deriving PolarValue via GenericPolarRecord Repository
 
 
 newtype Organization = Organization
   { name :: Text }
-  deriving stock (Eq, Show)
-
-
-instance PolarValue Organization where
-  toPolarTerm = externalInstance
-  call Organization{ name } = \case
-    "name" -> \_ -> Just $ toPolarTerm name
-    _ -> const Nothing
-  classTagOf _ = "Organization"
+  deriving stock (Eq, Generic, Show)
+  deriving PolarValue via GenericPolarRecord Organization
 
 
 expect :: Exception e => Either e a -> IO a
