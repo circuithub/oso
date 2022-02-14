@@ -219,6 +219,15 @@ main = hspec do
             polarClearRules polar
               `shouldReturn` Right ()
 
+          it "clears rules" \polar -> do
+            expect =<< polarLoad polar ["f(1);"]
+            expect =<< polarClearRules polar
+
+            query <- expect =<< polarNewQuery polar "f(x)" False
+            $( shouldMatch
+                 [e| polarNextQueryEvent query |]
+                 [p| Left (PolarError (RuntimeError (QueryForUndefinedRule "f")) _) |] )
+
       describe "polarRegisterConstant" do
         before polarNew do
           it "doesn't crash on valid definitions" \polar -> do
