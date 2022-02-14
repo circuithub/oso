@@ -153,7 +153,9 @@ instance FromJSON PolarValidationError where
     ]
 
 
-data PolarRuntimeError = ApplicationError String String PolarTerm
+data PolarRuntimeError 
+  = ApplicationError String String PolarTerm
+  | QueryForUndefinedRule String
   deriving stock (Eq, Show)
 
 
@@ -164,6 +166,9 @@ instance FromJSON PolarRuntimeError where
         stackTrace <- o .: "stack_trace"
         term <- o .: "term"
         pure $ ApplicationError msg stackTrace term
+    , o .: "QueryForUndefinedRule" >>= withObject "QueryForUndefinedRule" \o -> do
+        name <- o .: "name"
+        return $ QueryForUndefinedRule name
     ]
 
 

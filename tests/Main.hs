@@ -54,7 +54,7 @@ import Polar
   , GenericPolarRecord(GenericPolarRecord)
   , PolarError( PolarError )
   , PolarErrorKind( ParseError, RuntimeError )
-  , PolarRuntimeError( ApplicationError )
+  , PolarRuntimeError( ApplicationError, QueryForUndefinedRule )
   , PolarParseError( UnrecognizedEOF )
   , PolarTerm( BoolLit, StringLit, ListLit, ExpressionTerm, Variable, ExternalInstanceTerm, CallTerm )
   , PolarValue
@@ -258,6 +258,13 @@ main = hspec do
             $( shouldMatch
                  [e| polarNextQueryEvent query |]
                  [p| Right _ |] )
+
+          it "throws on unknown rules" \polar -> do
+            query <- expect =<< polarNewQuery polar "f(x)" False
+
+            $( shouldMatch
+                 [e| polarNextQueryEvent query |]
+                 [p| Left (PolarError (RuntimeError (QueryForUndefinedRule "f")) _) |] )
 
   describe "Functional tests" do
     before polarNew do
