@@ -8,7 +8,7 @@ This library contains Haskell bindings to the [Polar](https://osohq.com) query e
 module Main where
 
 import Control.Exception
-import OSO
+import Oso
 
 
 -- Define ordinary Haskell types, deriving PolarValue to allow them to be used
@@ -50,16 +50,16 @@ allow = rule "allow"
 main :: IO ()
 main = do
   -- Create a new handle to the Polar query engine.
-  polar <- polarNew
+  oso <- newOso
 
   -- Register any types used for RBAC
-  registerType @User polar
-  registerType @Role polar
-  registerType @Repository polar
-  registerType @Organization polar
+  registerType @User oso
+  registerType @Role oso
+  registerType @Repository oso
+  registerType @Organization oso
 
   -- Load the policy.polar file
-  expect =<< polarLoad polar =<< readFile "policy.polar"
+  expect =<< loadFiles oso ["policy.polar"]
 
   -- Fetch data needed for authorization. For this example we'll just construct
   -- some test values.
@@ -73,9 +73,9 @@ main = do
   let chUser = User{ roles = [ Role{ name = "owner", resource = circuitHub } ] }
 
   -- Run some queries!
-  queryRuleOnce polar $ allow chUser "read" chRepository  -- True
+  isAllowed oso chUser "read" chRepository  -- True
 
-  queryRuleOnce polar $ allow chUser "read" osoRepository -- False
+  isAllowed oso chUser "read" osoRepository -- False
 
 
 expect :: Exception e => Either e a -> IO a
