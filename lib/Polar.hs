@@ -82,7 +82,7 @@ import Control.Monad.Trans.State.Strict ( State, runState, state )
 
 data PolarError
   = PolarError PolarErrorKind Text
-  | CouldNotDecodeQueryEvent String
+  | CouldNotDecodeQueryEvent String String
   | UnknownError String String
   deriving stock (Eq, Show)
   deriving anyclass Exception
@@ -276,7 +276,7 @@ polarNextQueryEvent query = do
     Left e -> pure (Left e)
     Right json ->
       case eitherDecodeStrict' (encodeUtf8 (pack json)) of
-        Left e  -> pure (Left (CouldNotDecodeQueryEvent e))
+        Left e  -> pure (Left (CouldNotDecodeQueryEvent e json))
         Right x -> pure (Right x)
 
 
