@@ -310,6 +310,7 @@ data PolarTerm
   | Variable String
   | ExternalInstanceTerm ExternalInstance
   | CallTerm Call
+  | IntegerLit Integer
   deriving stock (Eq, Show)
 
 
@@ -324,6 +325,8 @@ instance FromJSON PolarTerm where
         , ExternalInstanceTerm <$> o .: "ExternalInstance"
         , ListLit <$> o .: "List"
         , CallTerm <$> o .: "Call"
+        , o .: "Number" >>= withObject "Number" \o ->
+            IntegerLit <$> o .: "Integer"
         ]
 
 
@@ -337,6 +340,7 @@ instance ToJSON PolarTerm where
       CallTerm t -> [aesonQQ| {"Call": #{t} } |]
       ListLit terms -> [aesonQQ| {"List": #{terms}} |]
       BoolLit b -> [aesonQQ| {"Bool": #{b}} |]
+      IntegerLit x -> [aesonQQ| {"Number": {"Integer": #{x}}} |]
 
 
 data Expression = Expression

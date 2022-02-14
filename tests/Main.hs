@@ -56,7 +56,7 @@ import Polar
   , PolarErrorKind( ParseError, RuntimeError )
   , PolarRuntimeError( ApplicationError, QueryForUndefinedRule )
   , PolarParseError( UnrecognizedEOF )
-  , PolarTerm( BoolLit, StringLit, ListLit, ExpressionTerm, Variable, ExternalInstanceTerm, CallTerm )
+  , PolarTerm( BoolLit, StringLit, ListLit, ExpressionTerm, Variable, ExternalInstanceTerm, CallTerm, IntegerLit )
   , PolarValue
   , QueryEvent( ResultEvent, DoneEvent, ExternalIsaEvent, ExternalIsSubclassEvent, ExternalIsaWithPathEvent, ExternalCallEvent, ExternalOpEvent )
   , Result( Result, bindings, trace )
@@ -114,6 +114,11 @@ main = hspec do
         jsonSpec
           (BoolLit True)
           [aesonQQ|{"value":{"Bool":true}}|]
+
+      describe "IntegerLit" do
+        jsonSpec
+          (IntegerLit 123)
+          [aesonQQ|{"value":{"Number":{"Integer":123}}}|]
 
       describe "ListLit" do
         jsonSpec
