@@ -54,7 +54,7 @@ import Foreign.C ( CChar, peekCString, withCString )
 import Foreign.ForeignPtr ( ForeignPtr, newForeignPtr, withForeignPtr )
 import Foreign.Ptr ( Ptr, castPtr, nullPtr )
 import Foreign.Storable ( peekByteOff, sizeOf )
-import GHC.Generics ( C1, D1, Generic, K1( K1 ), M1( M1 ), Meta( MetaSel ), Rec0, Rep, S1, type (:*:)( (:*:) ), from )
+import GHC.Generics ( C1, D1, Generic, K1( K1 ), M1( M1 ), Meta( MetaSel ), Rec0, Rep, S1, type (:*:)( (:*:) ), from, to )
 import GHC.TypeLits ( KnownSymbol, symbolVal )
 import Type.Reflection ( SomeTypeRep( SomeTypeRep ), Typeable, typeOf, typeRep )
 
@@ -78,6 +78,8 @@ import qualified Data.Text.Lazy as LT
 
 -- transformers
 import Control.Monad.Trans.State.Strict ( State, runState, state )
+import Data.Bifunctor (first)
+import Data.Maybe (isJust)
 
 
 data PolarError
@@ -399,6 +401,7 @@ data QueryEvent
   | ExternalIsaWithPathEvent ExternalIsaWithPath
   | ExternalCallEvent ExternalCall
   | ExternalOpEvent ExternalOp
+  | MakeExternalEvent MakeExternal
   deriving stock (Eq, Show)
 
 
@@ -411,6 +414,7 @@ instance FromJSON QueryEvent where
     <|> ExternalIsaWithPathEvent <$> o .: "ExternalIsaWithPath"
     <|> ExternalCallEvent <$> o .: "ExternalCall"
     <|> ExternalOpEvent <$> o .: "ExternalOp"
+    <|> MakeExternalEvent <$> o .: "MakeExternal"
 
 
 data Result = Result
@@ -512,27 +516,60 @@ instance FromJSON ExternalOp where
     return ExternalOp{ callId, operator, args }
 
 
+data MakeExternal = MakeExternal
+  { instanceId :: Word64
+  , constructor :: PolarTerm
+  }
+  deriving stock (Eq, Show)
+
+
+instance FromJSON MakeExternal where
+  parseJSON = withObject "MakeExternal" \o -> do
+    instanceId <- o .: "instance_id"
+    constructor <- o .: "constructor"
+    return MakeExternal{ instanceId, constructor }
+
+
 data Environment = Environment
   { instanceMap :: Map Word64 Instance
-  , types :: Map SomeTypeRep Word64
+  , types :: Map String SomePolarType
   }
+  deriving stock (Eq)
+
+
+data SomePolarType where
+  SomePolarType :: PolarValue a => Proxy a -> SomePolarType
+
+
+instance Eq SomePolarType where
+  SomePolarType a == SomePolarType b = go a b
+    where
+      go :: forall a b. (PolarValue a, PolarValue b) => Proxy a -> Proxy b -> Bool
+      go _ _ =
+        isJust $ testEquality (typeRep @a) (typeRep @b)
+
+instance Show SomePolarType where
+  show (SomePolarType p) = go p
+    where 
+      go :: forall a. PolarValue a => Proxy a -> String
+      go _ = show $ typeRep @a
 
 
 emptyEnvironment :: Environment
 emptyEnvironment = Environment mempty mempty
 
 
-externalInstance :: PolarValue a => a -> State Environment PolarTerm
+externalInstance :: forall a. PolarValue a => a -> State Environment PolarTerm
 externalInstance a = state \environment -> do
   let i = maybe 0 (succ . fst) (Map.lookupMax (instanceMap environment))
 
   let x = Instance{ value = a }
 
-  let t = SomeTypeRep (typeOf a)
+  let t = show $ SomeTypeRep (typeOf a)
 
   let environment' = environment
         { instanceMap = Map.insert i x (instanceMap environment)
-        , types = Map.insertWith (\_ old -> old) t (fromIntegral (Map.size (types environment))) (types environment)
+        , types = Map.insertWith (\_ old -> old) t (SomePolarType (Proxy @a)) (types environment)
         }
 
   let term = ExternalInstanceTerm ExternalInstance{ instanceId = i }
@@ -554,7 +591,19 @@ instance Eq Instance where
      Just Refl -> valueA == valueB
 
 
-runQuery :: Polar -> State Environment PolarTerm -> Stream (Of Result) IO (Either PolarError Bool)
+data QueryResult = QueryResult
+  { bindings :: Map String PolarTerm
+  , environment :: Environment
+  }
+  deriving stock (Eq)
+
+
+getResultVariable :: PolarValue a => QueryResult -> String -> Maybe a
+getResultVariable QueryResult{ bindings, environment } v =
+  Map.lookup v bindings >>= fromPolarTerm environment
+
+
+runQuery :: Polar -> State Environment PolarTerm -> Stream (Of QueryResult) IO (Either PolarError Bool)
 runQuery polar queryBuilder = do
   environment <- liftIO (readIORef (environmentRef polar))
 
@@ -565,7 +614,16 @@ runQuery polar queryBuilder = do
     Right q -> unfoldQuery env q
 
 
-unfoldQuery :: Environment -> Query -> Stream (Of Result) IO (Either PolarError Bool)
+runQueryString :: Polar -> String -> Stream (Of QueryResult) IO (Either PolarError Bool)
+runQueryString polar queryString = do
+  env <- liftIO (readIORef (environmentRef polar))
+
+  liftIO (polarNewQuery polar queryString False) >>= \case
+    Left e  -> return (Left e)
+    Right q -> unfoldQuery env q
+
+
+unfoldQuery :: Environment -> Query -> Stream (Of QueryResult) IO (Either PolarError Bool)
 unfoldQuery env q = S.unfoldr go env where
   go env = polarNextQueryEvent q >>= \case
     Left e ->
@@ -579,8 +637,8 @@ unfoldQuery env q = S.unfoldr go env where
         DoneEvent Done{ result } ->
           return $ Left (Right result)
 
-        ResultEvent r ->
-          return $ Right (r, env)
+        ResultEvent Result{ bindings } ->
+          return $ Right (QueryResult{ bindings, environment = env }, env)
 
         ExternalIsaEvent ExternalIsa{ callId, instance_ = ExternalInstanceTerm ExternalInstance{ instanceId }, classTag = y } -> do
           Instance{ value = x } <- case Map.lookup instanceId (instanceMap env) of
@@ -631,6 +689,24 @@ unfoldQuery env q = S.unfoldr go env where
           polarQuestionResult q callId (x == y) >>= \case
             Left e -> pure $ Left $ Left e
             Right () -> go env
+
+        MakeExternalEvent MakeExternal{ instanceId, constructor = CallTerm Call{ name = constructorName, args } } -> do
+          somePolarType <- case Map.lookup constructorName (types env) of
+            Nothing -> fail "Could not find constructor"
+            Just x -> return x
+
+          case somePolarType of
+            SomePolarType p -> do
+              let mk :: forall t. PolarValue t => Proxy t -> Maybe t
+                  mk _ = construct @t env args
+
+              case mk p of
+                Just a -> do
+                  let env' = env { instanceMap = Map.insert instanceId (Instance a) (instanceMap env) }
+                  go env'
+
+                Nothing ->
+                  fail "Could not construct"
 
 
 decodePolarError :: String -> PolarError
@@ -684,6 +760,8 @@ class (Eq a, Typeable a) => PolarValue a where
   -- 'externalInstance', which essentially sends the value as a pointer.
   toPolarTerm :: a -> State Environment PolarTerm
 
+  fromPolarTerm :: Environment -> PolarTerm -> Maybe a
+
   -- | Handle attribute access or method calls. If the given value doesn't
   -- support a method or attribute, 'Nothing' can be returned.
   call 
@@ -694,17 +772,31 @@ class (Eq a, Typeable a) => PolarValue a where
 
   classTagOf :: a -> String
 
+  construct :: Environment -> [PolarTerm] -> Maybe a
+
 
 instance PolarValue a => PolarValue [a] where
   toPolarTerm xs = ListLit <$> traverse toPolarTerm xs
+
+  fromPolarTerm e = \case
+    ListLit xs -> traverse (fromPolarTerm e) xs
+    _          -> Nothing
+
   call _ _ _ = Nothing
   classTagOf _ = "?"
+  construct _ _ = Nothing
 
 
 instance PolarValue Text where
   toPolarTerm = pure . StringLit
+
+  fromPolarTerm _ = \case
+    StringLit t -> Just t
+    _           -> Nothing
+
   call _ _ _ = Nothing
   classTagOf _ = "String"
+  construct _ _ = Nothing
 
 
 class Rule arg res where
@@ -731,30 +823,32 @@ data RegisteredType = RegisteredType
 
 instance PolarValue RegisteredType where
   toPolarTerm = externalInstance
+
   call _ _ _ = Nothing
   classTagOf RegisteredType = "RegisteredType"
+  construct _ _ = Nothing
 
 
 registerType :: forall a. PolarValue a => Polar -> IO (Either PolarError ())
 registerType polar = do
+  let t = show $ SomeTypeRep (typeRep @a)
+
   instance_ <-
     atomicModifyIORef (environmentRef polar) \environment -> do
       let instanceId = maybe 0 (succ . fst) (Map.lookupMax (instanceMap environment))
 
       let x = Instance{ value = RegisteredType }
 
-      let t = SomeTypeRep (typeRep @a)
-
       let environment' = environment
             { instanceMap = Map.insert instanceId x (instanceMap environment)
-            , types = Map.insertWith (\_ old -> old) t instanceId (types environment)
+            , types = Map.insertWith (\_ old -> old) t (SomePolarType (Proxy @a)) (types environment)
             }
 
       let term = ExternalInstanceTerm ExternalInstance{ instanceId }
 
       (environment', term)
 
-  polarRegisterConstant polar (show (typeRep @a)) instance_
+  polarRegisterConstant polar t instance_
 
 
 -- | A deriving-via wrapper type to derive 'PolarValue' instances for record types.
@@ -762,30 +856,61 @@ newtype GenericPolarRecord a = GenericPolarRecord a
   deriving stock (Eq, Show)
 
 
-instance (GPolarFields (Rep a), Generic a, Eq a, Typeable a) => PolarValue (GenericPolarRecord a) where
+instance (GPolarFields (Rep a), Generic a, Eq a, Typeable a, Show a) => PolarValue (GenericPolarRecord a) where
   toPolarTerm = externalInstance
 
   call (GenericPolarRecord x) = gcall (from x)
 
   classTagOf _ = show (typeRep @a)
 
+  construct e = fmap (GenericPolarRecord . to . fst) . gconstruct @(Rep a) @() e
+
+  fromPolarTerm e = \case
+    ExternalInstanceTerm ExternalInstance{ instanceId } -> do
+      Instance{ value } <- Map.lookup instanceId (instanceMap e) 
+      GenericPolarRecord <$> cast value
+      where
+        cast :: forall x. PolarValue x => x -> Maybe a
+        cast x = testEquality (typeRep @x) (typeRep @a) <&> \Refl -> x
+
+    _ -> Nothing
+
 
 class GPolarFields f where
   gcall :: f x -> String -> [PolarTerm] -> Maybe (State Environment PolarTerm)
+
+  gconstruct :: Environment -> [PolarTerm] -> Maybe (f x, [PolarTerm])
 
 
 instance GPolarFields f => GPolarFields (D1 m f) where
   gcall (M1 a) = gcall a
 
+  gconstruct e = fmap (first M1) . gconstruct @f e
+
 
 instance GPolarFields f => GPolarFields (C1 m f) where
   gcall (M1 a) = gcall a
+
+  gconstruct e = fmap (first M1) . gconstruct @f e
 
 
 instance (GPolarFields l, GPolarFields r) => GPolarFields (l :*: r) where
   gcall (l :*: r) name args = gcall l name args <|> gcall r name args
 
+  gconstruct e args = do
+    (l, args') <- gconstruct @l e args
+    (r, args'') <- gconstruct @r e args'
+    return (l :*: r, args'')
+
 
 instance (KnownSymbol name, PolarValue x) => GPolarFields (S1 ('MetaSel ('Just name) a b c) (Rec0 x)) where
   gcall (M1 (K1 a)) n [] | n == symbolVal (Proxy @name) = Just $ toPolarTerm a
   gcall (M1 _) _ _  = Nothing
+
+  gconstruct e = \case
+    x:xs -> 
+      case fromPolarTerm e x of
+        Just y -> Just (M1 (K1 y), xs)
+        _      -> Nothing
+
+    _ -> Nothing

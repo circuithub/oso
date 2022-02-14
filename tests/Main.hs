@@ -46,7 +46,7 @@ import Polar
   , Environment
   , Expression( Expression, operator, args )
   , ExternalCall( ExternalCall, callId, instance_, attribute )
-  , ExternalInstance( ExternalInstance )
+  , ExternalInstance( ExternalInstance, instanceId )
   , ExternalIsSubclass( ExternalIsSubclass, callId )
   , ExternalIsa( ExternalIsa, callId, instance_, classTag )
   , ExternalIsaWithPath( ExternalIsaWithPath, callId )
@@ -61,7 +61,7 @@ import Polar
   , QueryEvent( ResultEvent, DoneEvent, ExternalIsaEvent, ExternalIsSubclassEvent, ExternalIsaWithPathEvent, ExternalCallEvent, ExternalOpEvent )
   , Result( Result, bindings, trace )
   , emptyEnvironment
-  , instanceId
+  , getResultVariable
   , name
   , polarClearRules
   , polarLoad
@@ -74,7 +74,8 @@ import Polar
   , registerType
   , rule
   , runQuery
-  , unfoldQuery
+  , runQueryString
+  , unfoldQuery, QueryResult (QueryResult, bindings)
   )
 import ShouldMatch ( shouldMatch )
 
@@ -288,7 +289,9 @@ main = hspec do
             result <- expect =<< polarNextQueryEvent query
 
             case result of
-              ResultEvent r -> bindings r `shouldBe` Map.singleton "x" (IntegerLit 1)
+              ResultEvent Result{ bindings } -> 
+                bindings `shouldBe` Map.singleton "x" (IntegerLit 1)
+
               _ -> expectationFailure "Expected a result"
 
   describe "Functional tests" do
@@ -302,7 +305,7 @@ main = hspec do
 
           $( shouldMatch
                [e| S.toList $ runQuery polar (rule "test" user) |]
-               [p| [Result{}] :> Right True |] )
+               [p| [QueryResult{}] :> Right True |] )
                
           $( shouldMatch
                [e| S.toList $ runQuery polar (rule "test" org) |]
@@ -316,6 +319,16 @@ main = hspec do
           $( shouldMatch
                [e| S.toList $ runQuery polar (rule "test" user) |]
                [p| [] :> Left (PolarError (RuntimeError ApplicationError{}) _) |] )
+
+        it "can construct external instances" \polar -> do
+          expect =<< registerType @Organization polar
+
+          S.toList_ (runQueryString polar "new Organization(\"test\") = x") >>= \case
+            [result] -> 
+              getResultVariable result "x" `shouldBe`
+                Just (Organization "test")
+
+            _ -> expectationFailure "Expected one result"
 
   describe "Examples" do
     before polarNew do
@@ -339,8 +352,9 @@ main = hspec do
 
         query <- expect =<< polarNewQuery polar [s| father("Artemis", "Zeus") |] False
 
-        S.toList_ (unfoldQuery emptyEnvironment query) `shouldReturn`
-          [ Result{ bindings = mempty, trace = Nothing } ]
+        $( shouldMatch
+             [e| S.toList_ (unfoldQuery emptyEnvironment query) |]
+             [p| [ QueryResult{} ] |] )
 
       it "can find all children of Zeus" \polar -> do
         polarLoad polar
@@ -351,16 +365,13 @@ main = hspec do
 
         query <- expect =<< polarNewQuery polar [s| father(child, "Zeus") |] False
 
-        S.toList_ (unfoldQuery emptyEnvironment query) `shouldReturn`
-          [ Result
-              { bindings = Map.singleton "child" (StringLit "Artemis")
-              , trace = Nothing
-              }
-          , Result
-              { bindings = Map.singleton "child" (StringLit "Apollo")
-              , trace = Nothing
-              }
-          ]
+        S.toList_ (unfoldQuery emptyEnvironment query) >>= \case
+          [ QueryResult{ bindings = bindings1 }, QueryResult{ bindings = bindings2 } ] -> do
+              bindings1 `shouldBe` Map.singleton "child" (StringLit "Artemis")
+              bindings2 `shouldBe` Map.singleton "child" (StringLit "Apollo")
+
+          _ ->
+            expectationFailure "Expected two query results"
 
       it "can find the grandfather of Ascelpius" \polar -> do
         polarLoad polar
@@ -373,12 +384,11 @@ main = hspec do
 
         query <- expect =<< polarNewQuery polar [s| grandfather("Asclepius", grandpa) |] False
 
-        S.toList_ (unfoldQuery emptyEnvironment query) `shouldReturn`
-          [ Result
-              { bindings = Map.singleton "grandpa" (StringLit "Zeus")
-              , trace = Nothing
-              }
-          ]
+        S.toList_ (unfoldQuery emptyEnvironment query) >>= \case
+          [ QueryResult{ bindings } ] -> 
+              bindings `shouldBe` Map.singleton "grandpa" (StringLit "Zeus")
+
+          _ -> expectationFailure "Expected one query result"
 
       describe "External instances" do
         it "can lookup fields on external instances" \polar -> do
@@ -389,7 +399,7 @@ main = hspec do
 
           $( shouldMatch
                [e| S.toList_ (runQuery polar (rule "foo" o)) |]
-               [p| [Result{}] |] )
+               [p| [QueryResult{}] |] )
 
         it "can fail to search when using external instances" \polar -> do
           expect =<< polarLoad polar
@@ -463,12 +473,14 @@ main = hspec do
 
         beforeWith setup do
           it "allows user to read ourRepository" \polar -> do
-            S.toList (runQuery polar (allow user "read" ourRepository)) `shouldReturn`
-              [Result{ bindings = mempty, trace = Nothing }] :> Right True
+            $( shouldMatch
+                 [e|S.toList (runQuery polar (allow user "read" ourRepository)) |]
+                 [p| [QueryResult{}] :> Right True |] )
 
           it "allows user to read chRepositry" \polar -> do
-            S.toList (runQuery polar (allow user "read" chRepository)) `shouldReturn`
-              [Result{ bindings = mempty, trace = Nothing }] :> Right True
+            $( shouldMatch
+                 [e| S.toList (runQuery polar (allow user "read" chRepository)) |]
+                 [p| [QueryResult{ }] :> Right True |] )
 
           it "does not allow user to read osoRepository" \polar -> do
             S.toList (runQuery polar (allow user "read" osoRepository)) `shouldReturn`
