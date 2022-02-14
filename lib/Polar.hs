@@ -420,6 +420,14 @@ data Result = Result
   deriving stock (Eq, Generic, Show)
 
 
+instance FromJSON Result where
+  parseJSON = withObject "Result" \o -> do
+    bindings <- o .: "bindings"
+    trace <- o .: "trace"
+
+    return Result{ bindings, trace }
+
+
 newtype Trace = Trace { formatted :: String }
   deriving stock (Eq, Show)
 
@@ -427,14 +435,6 @@ newtype Trace = Trace { formatted :: String }
 instance FromJSON Trace where
   parseJSON = withObject "Trace" \o ->
     Trace <$> o .: "formatted"
-
-
-instance FromJSON Result where
-  parseJSON = withObject "Result" \o -> do
-    bindings <- o .: "bindings"
-    trace <- o .: "trace"
-
-    return Result{ bindings, trace }
 
 
 data Done = Done { result :: Bool }
