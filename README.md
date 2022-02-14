@@ -42,11 +42,6 @@ newtype Organization = Organization
   deriving PolarValue via GenericPolarRecord Repository
 
 
--- A Haskell function for constructing a query against the 'allow' rule
-allow :: (PolarValue a, PolarValue b) => a -> String -> b -> QueryBuilder
-allow = rule "allow"
-
-
 main :: IO ()
 main = do
   -- Create a new handle to the Polar query engine.
