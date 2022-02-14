@@ -271,6 +271,17 @@ main = hspec do
                  [e| polarNextQueryEvent query |]
                  [p| Left (PolarError (RuntimeError (QueryForUndefinedRule "f")) _) |] )
 
+          it "returns bindings" \polar -> do
+            expect =<< polarLoad polar ["f(1);"]
+
+            query <- expect =<< polarNewQuery polar "f(x)" False
+
+            result <- expect =<< polarNextQueryEvent query
+
+            case result of
+              ResultEvent r -> bindings r `shouldBe` Map.singleton "x" (IntegerLit 1)
+              _ -> expectationFailure "Expected a result"
+
   describe "Functional tests" do
     before polarNew do
       describe "External instances" do
