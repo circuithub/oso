@@ -294,6 +294,20 @@ main = hspec do
   describe "Functional tests" do
     before polarNew do
       describe "External instances" do
+        it "can specialise" \polar -> do
+          expect =<< polarLoad polar [[s| test(_: User); |]]
+
+          let user = User{ roles = [] }
+          let org = Organization{ name = "Org" }
+
+          $( shouldMatch
+               [e| S.toList $ runQuery polar (rule "test" user) |]
+               [p| [Result{}] :> Right True |] )
+               
+          $( shouldMatch
+               [e| S.toList $ runQuery polar (rule "test" org) |]
+               [p| [] :> Right True |] )
+
         it "correctly handles missing attributes" \polar -> do
           expect =<< polarLoad polar [[s| test(u: User) if u.name == "Simon"; |]]
 
