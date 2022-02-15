@@ -318,6 +318,7 @@ data PolarTerm
   | ExternalInstanceTerm ExternalInstance
   | CallTerm Call
   | IntegerLit Integer
+  | Dictionary (Map.Map String PolarTerm)
   deriving stock (Eq, Show)
 
 
@@ -341,6 +342,8 @@ instance FromJSON PolarTerm where
                 "NaN"       -> pure $ DoubleLit (0/0)
                 _           -> empty
             ]
+        , o .: "Dictionary" >>= withObject "Dictionary" \o ->
+            Dictionary <$> o .: "fields"
         ]
 
 
@@ -361,6 +364,8 @@ instance ToJSON PolarTerm where
             | x == 1/0  = String "Infinity"
             | x == -1/0 = String "-Infinity"
             | otherwise = Number $ fromFloatDigits x
+      Dictionary xs -> [aesonQQ| {"Dictionary":{"fields":#{xs}}} |]
+
 
 data Expression = Expression
   { operator :: String

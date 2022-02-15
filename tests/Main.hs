@@ -57,7 +57,7 @@ import Polar
   , PolarErrorKind( ParseError, RuntimeError )
   , PolarRuntimeError( ApplicationError, QueryForUndefinedRule )
   , PolarParseError( UnrecognizedEOF )
-  , PolarTerm( BoolLit, StringLit, ListLit, ExpressionTerm, Variable, ExternalInstanceTerm, CallTerm, IntegerLit, DoubleLit )
+  , PolarTerm( BoolLit, StringLit, ListLit, ExpressionTerm, Variable, ExternalInstanceTerm, CallTerm, IntegerLit, DoubleLit, Dictionary )
   , PolarValue
   , QueryEvent( ResultEvent, DoneEvent, ExternalIsaEvent, ExternalIsSubclassEvent, ExternalIsaWithPathEvent, ExternalCallEvent, ExternalOpEvent )
   , Result( Result, bindings, trace )
@@ -178,6 +178,20 @@ main = hspec do
                 "name":"allow",
                 "args":[{"value":{"Bool":true}}],
                 "kwargs":null
+              }
+            }
+          }|]
+
+      describe "Dictionary" do
+        jsonSpec
+          (Dictionary (Map.fromList [("a", BoolLit True), ("b", StringLit "hello")]))
+          [aesonQQ|{
+            "value":{
+              "Dictionary":{
+                "fields": {
+                  "a": {"value":{"Bool":true}},
+                  "b": {"value":{"String":"hello"}}
+                }
               }
             }
           }|]
