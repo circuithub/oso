@@ -36,7 +36,7 @@ import Test.Hspec
   , it
   , shouldBe
   , shouldReturn
-  , xdescribe
+  , xdescribe, xit
   )
 
 -- oso
@@ -371,6 +371,15 @@ main = hspec do
             [result] -> 
               getResultVariable result "x" `shouldBe`
                 Just Organization{ name = "test" }
+
+            _ -> expectationFailure "Expected one result"
+
+        xit "pre-registers a type for nil" \polar -> do
+          S.toList (runQueryString polar "nil = x") >>= \case
+            [result] :> Right True -> 
+              fail $ show result
+
+            _ :> Left e -> throw e
 
             _ -> expectationFailure "Expected one result"
 
