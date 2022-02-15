@@ -55,7 +55,7 @@ import Foreign.C ( CChar, peekCString, withCString )
 import Foreign.ForeignPtr ( ForeignPtr, newForeignPtr, withForeignPtr )
 import Foreign.Ptr ( Ptr, castPtr, nullPtr )
 import Foreign.Storable ( peekByteOff, sizeOf )
-import GHC.Generics ( C1, D1, Generic, K1( K1 ), M1( M1 ), Meta( MetaSel ), Rec0, Rep, S1, type (:*:)( (:*:) ), from, to, U1 (U1) )
+import GHC.Generics ( C1, D1, Generic, K1( K1 ), M1( M1 ), Meta( MetaSel ), Rec0, Rep, S1, type (:*:)( (:*:) ), from, to, U1 (U1), unM1 )
 import GHC.TypeLits ( KnownSymbol, symbolVal )
 import Type.Reflection ( SomeTypeRep( SomeTypeRep ), Typeable, typeOf, typeRep )
 
@@ -76,7 +76,8 @@ import Streaming ( Stream )
 import qualified Streaming.Prelude as S
 
 -- text
-import Data.Text ( Text, pack )
+-- text
+import Data.Text ( Text, pack, unpack )
 import Data.Text.Encoding ( encodeUtf8 )
 import qualified Data.Text.Lazy as LT
 
@@ -84,6 +85,7 @@ import qualified Data.Text.Lazy as LT
 import Control.Monad.Trans.State.Strict ( State, runState, state )
 import Data.Bifunctor (first)
 import Data.Maybe (isJust)
+import Data.Functor.Contravariant (Contravariant, contramap)
 
 
 data PolarError
@@ -195,7 +197,11 @@ polarNew = do
 
   polarForeignPtr <- newForeignPtr C.polar_free polarPtr
 
-  return Polar{ polarPtr = polarForeignPtr, environmentRef }
+  let polar = Polar{ polarPtr = polarForeignPtr, environmentRef }
+
+  registerType @Integer polar
+
+  return polar
 
 
 polarLoad :: (Foldable f) => Polar -> f Text -> IO (Either PolarError ())
@@ -319,6 +325,7 @@ data PolarTerm
   | CallTerm Call
   | IntegerLit Integer
   | Dictionary (Map.Map String PolarTerm)
+  | Pattern
   deriving stock (Eq, Show)
 
 
@@ -344,6 +351,7 @@ instance FromJSON PolarTerm where
             ]
         , o .: "Dictionary" >>= withObject "Dictionary" \o ->
             Dictionary <$> o .: "fields"
+        , o .: "Pattern" >>= withObject "Pattern" \_ -> pure Pattern
         ]
 
 
@@ -688,6 +696,11 @@ unfoldQuery env q = S.unfoldr go env where
             Left e -> pure $ Left $ Left e
             Right () -> go env
 
+        ExternalIsaEvent ExternalIsa{ callId, instance_ = IntegerLit{}, classTag = "Integer" } -> do
+          polarQuestionResult q callId True >>= \case
+            Left e -> pure $ Left $ Left e
+            Right () -> go env
+
         ExternalCallEvent ExternalCall{ callId, instance_ = ExternalInstanceTerm ExternalInstance{ instanceId }, attribute } -> do
           x <- case Map.lookup instanceId (instanceMap env) of
             Nothing -> fail "Could not find instance (2)"
@@ -745,7 +758,37 @@ unfoldQuery env q = S.unfoldr go env where
                 Left e ->
                   fail $ "Could not construct: " <> e <> show args
 
+        ExternalIsaWithPathEvent ExternalIsaWithPath{ callId, baseTag, path, classTag } -> do
+          SomePolarType p <- case Map.lookup baseTag (types env) of
+            Nothing -> fail $ "Could not find base tag: " <> baseTag
+            Just x -> return x
+
+          t2 <- case resolvePath p path of
+            Nothing -> fail "Could not lookup field"
+            Just t2 -> pure t2
+
+          t3 <- case Map.lookup classTag (types env) of
+            Nothing -> fail "Could not find class tag"
+            Just x -> return x
+
+          polarQuestionResult q callId (t2 == t3) >>= \case
+            Left e -> pure $ Left $ Left e
+            Right () -> go env
+
         x -> fail $ show x <> " is not handled"
+
+
+resolvePath :: forall a. PolarValue a => Proxy a -> [PolarTerm] -> Maybe SomePolarType
+resolvePath p = \case
+  [] -> 
+    Just $ SomePolarType p
+
+  StringLit x : xs -> do
+    FieldOf p' <- Map.lookup (unpack x) (fields @a)
+    resolvePath p' xs
+
+  _ : _ ->
+    Nothing
 
 
 decodePolarError :: String -> PolarError
@@ -799,6 +842,14 @@ data ConstructorArguments = ConstructorArguments
   }
 
 
+data FieldOf a where
+  FieldOf :: PolarValue x => Proxy x -> FieldOf a
+
+
+instance Contravariant FieldOf where
+  contramap _ (FieldOf p) = FieldOf p
+
+
 -- | Types that can be used in Polar rules.
 class (Eq a, Typeable a) => PolarValue a where
   -- | Convert a Haskell value to a Polar term. Typically this will be
@@ -815,6 +866,8 @@ class (Eq a, Typeable a) => PolarValue a where
     -> [PolarTerm] -- ^ Any arguments for the call (an empty list for attributes).
     -> Maybe (State Environment PolarTerm)
 
+  fields :: Map String (FieldOf a)
+
   classTagOf :: a -> String
 
   construct :: Environment -> ConstructorArguments -> Either String a
@@ -828,9 +881,12 @@ instance PolarValue a => PolarValue [a] where
     _          -> Nothing
 
   call _ _ _ = Nothing
+
   classTagOf _ = "?"
 
   construct _ _ = Left "Cannot construct lists"
+
+  fields = mempty
 
 
 instance PolarValue Text where
@@ -841,9 +897,12 @@ instance PolarValue Text where
     _           -> Nothing
 
   call _ _ _ = Nothing
+
   classTagOf _ = "String"
 
   construct _ _ = Left "Cannot construct Text"
+
+  fields = mempty
 
 
 class Rule arg res where
@@ -892,7 +951,7 @@ registerType polar = do
 
 
 -- | A deriving-via wrapper type to derive 'PolarValue' instances for record types.
-newtype GenericPolarRecord a = GenericPolarRecord a
+newtype GenericPolarRecord a = GenericPolarRecord { unGenericPolarRecord :: a }
   deriving stock (Eq, Show)
 
 
@@ -900,6 +959,8 @@ instance (GPolarFields (Rep a), Generic a, Eq a, Typeable a, Show a) => PolarVal
   toPolarTerm = externalInstance
 
   call (GenericPolarRecord x) = gcall (from x)
+
+  fields = contramap (from . unGenericPolarRecord) <$> gfields @(Rep a)
 
   classTagOf _ = show (typeRep @a)
 
@@ -921,17 +982,23 @@ class GPolarFields f where
 
   gconstruct :: Environment -> ConstructorArguments -> Either String (f x, ConstructorArguments)
 
+  gfields :: Map String (FieldOf (f x))
+
 
 instance GPolarFields f => GPolarFields (D1 m f) where
   gcall (M1 a) = gcall a
 
   gconstruct e = fmap (first M1) . gconstruct @f e
 
+  gfields = contramap unM1 <$> gfields @f
+
 
 instance GPolarFields f => GPolarFields (C1 m f) where
   gcall (M1 a) = gcall a
 
   gconstruct e = fmap (first M1) . gconstruct @f e
+
+  gfields = contramap unM1 <$> gfields @f
 
 
 instance (GPolarFields l, GPolarFields r) => GPolarFields (l :*: r) where
@@ -942,10 +1009,17 @@ instance (GPolarFields l, GPolarFields r) => GPolarFields (l :*: r) where
     (r, args'') <- gconstruct @r e args'
     return (l :*: r, args'')
 
+  gfields = 
+    Map.union 
+      (contramap (\(l :*: _) -> l) <$> gfields @l)
+      (contramap (\(_ :*: r) -> r) <$> gfields @r)
+
 
 instance (KnownSymbol name, PolarValue x) => GPolarFields (S1 ('MetaSel ('Just name) a b c) (Rec0 x)) where
   gcall (M1 (K1 a)) n [] | n == symbolVal (Proxy @name) = Just $ toPolarTerm a
   gcall (M1 _) _ _  = Nothing
+
+  gfields = Map.singleton (symbolVal (Proxy @name)) (FieldOf (Proxy @x))
 
   gconstruct e args@ConstructorArguments{ positionalArguments, namedArguments }
     | x:xs <- positionalArguments =
@@ -970,3 +1044,21 @@ instance GPolarFields U1 where
   gcall _ _ _ = Nothing
 
   gconstruct _ args = pure (U1, args)
+
+  gfields = mempty
+
+
+instance PolarValue Integer where
+  toPolarTerm = pure . IntegerLit
+
+  fromPolarTerm _ = \case
+    IntegerLit x -> pure x
+    _ -> Nothing
+
+  call _ _ _ = Nothing
+
+  fields = mempty
+
+  classTagOf _ = "Integer"
+
+  construct _ _ = Left "Cannot construct Integer"

@@ -445,7 +445,9 @@ main = hspec do
 
             _ -> expectationFailure "Expected one result"
 
-        xit "handles ExternalIsaWithPath" \polar -> do
+        it "handles ExternalIsaWithPath" \polar -> do
+          expect =<< registerType @Baz polar
+
           expect =<< polarLoad polar [[s| 
             f(x: Integer) if x = 0;
             g(x: Baz) if f(x.bar.foo.num);
@@ -644,3 +646,18 @@ newtype Organization = Organization
 
 expect :: Exception e => Either e a -> IO a
 expect = either throw return
+
+
+newtype Baz = Baz { bar :: Bar }
+  deriving stock (Eq, Generic, Show)
+  deriving PolarValue via GenericPolarRecord Baz
+
+
+newtype Bar = Bar { foo :: Foo }
+  deriving stock (Eq, Generic, Show)
+  deriving PolarValue via GenericPolarRecord Bar
+
+
+newtype Foo = Foo { num :: Integer }
+  deriving stock (Eq, Generic, Show)
+  deriving PolarValue via GenericPolarRecord Foo
