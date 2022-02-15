@@ -534,7 +534,7 @@ data Environment = Environment
   { instanceMap :: Map Word64 Instance
   , types :: Map String SomePolarType
   }
-  deriving stock (Eq)
+  deriving stock (Eq, Show)
 
 
 data SomePolarType where
@@ -584,6 +584,10 @@ data Instance where
     -> Instance
 
 
+instance Show Instance where
+  show _ = "Instance"
+
+
 instance Eq Instance where
   Instance{ value = valueA } == Instance{ value = valueB } =
    case testEquality (typeOf valueA) (typeOf valueB) of
@@ -595,7 +599,7 @@ data QueryResult = QueryResult
   { bindings :: Map String PolarTerm
   , environment :: Environment
   }
-  deriving stock (Eq)
+  deriving stock (Eq, Show)
 
 
 getResultVariable :: PolarValue a => QueryResult -> String -> Maybe a
