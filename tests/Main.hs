@@ -249,15 +249,24 @@ main = hspec do
             polarRegisterMro polar "foo" "bar"
               `shouldReturn` Right ()
 
-      xdescribe "polarNextInlineQuery" do
+      describe "polarNextInlineQuery" do
         before polarNew do
           it "returns the next inline query" \polar -> do
-            polarLoad polar ["refl(x) if x == x;"]
+            polarLoad polar ["?= x = True;"]
               `shouldReturn` Right ()
 
             $( shouldMatch
                  [e| polarNextInlineQuery polar False |]
                  [p| Just _ |])
+
+            $( shouldMatch
+                 [e| polarNextInlineQuery polar False |]
+                 [p| Nothing |])
+
+          it "returns Nothing if there are no inline queries" \polar -> do
+            $( shouldMatch
+                 [e| polarNextInlineQuery polar False |]
+                 [p| Nothing |])
 
       describe "polarNewQuery" do
         before polarNew do
