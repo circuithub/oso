@@ -330,6 +330,32 @@ main = hspec do
 
             _ -> expectationFailure "Expected one result"
 
+        it "can specialize external instances with dictionaries" \polar -> do
+          expect =<< registerType @Organization polar
+
+          expect =<< polarLoad polar [[s| named(_: { name: "Foo"}); |]]
+
+          $( shouldMatch
+               [e| S.toList_ (runQueryString polar "named(new Organization(\"Foo\"))") |]
+               [p| [ QueryResult{} ] |] )
+
+          $( shouldMatch
+               [e| S.toList_ (runQueryString polar "named(new Organization(\"Not foo\"))") |]
+               [p| [] |] )
+
+        it "can specialize external instance fields" \polar -> do
+          expect =<< registerType @Organization polar
+
+          expect =<< polarLoad polar [[s| named(_: Organization{ name: "Foo"}); |]]
+
+          $( shouldMatch
+               [e| S.toList_ (runQueryString polar "named(new Organization(\"Foo\"))") |]
+               [p| [ QueryResult{} ] |] )
+
+          $( shouldMatch
+               [e| S.toList_ (runQueryString polar "named(new Organization(\"Not foo\"))") |]
+               [p| [] |] )
+
   describe "Examples" do
     before polarNew do
       it "can load the first example" \polar -> do
