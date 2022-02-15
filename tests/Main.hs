@@ -48,9 +48,9 @@ import Polar
   , Expression( Expression, operator, args )
   , ExternalCall( ExternalCall, callId, instance_, attribute )
   , ExternalInstance( ExternalInstance, instanceId )
-  , ExternalIsSubclass( ExternalIsSubclass, callId )
+  , ExternalIsSubclass( ExternalIsSubclass, callId)
   , ExternalIsa( ExternalIsa, callId, instance_, classTag )
-  , ExternalIsaWithPath( ExternalIsaWithPath, callId )
+  , ExternalIsaWithPath( ExternalIsaWithPath, callId, classTag )
   , ExternalOp( ExternalOp, callId, args, operator )
   , GenericPolarRecord(GenericPolarRecord)
   , PolarError( PolarError )
@@ -76,7 +76,7 @@ import Polar
   , rule
   , runQuery
   , runQueryString
-  , unfoldQuery, QueryResult (QueryResult, bindings), kwargs
+  , unfoldQuery, QueryResult (QueryResult, bindings), kwargs, baseTag, path
   )
 import ShouldMatch ( shouldMatch )
 
@@ -209,9 +209,20 @@ main = hspec do
             }
 
       it "can decode ExternalIsaWithPath" do
-        fromJSON [aesonQQ|{"ExternalIsaWithPath":{"call_id": 123, "instance":{"value":{"Bool":true}}, "class_tag":"xyz"}}|] `shouldBe` do
+        fromJSON 
+          [aesonQQ|{
+            "ExternalIsaWithPath":{
+              "call_id": 123, 
+              "base_tag": "Baz",
+              "path": [{"value":{"String":"bar"}}],
+              "class_tag": "Integer"
+            }
+          }|] `shouldBe` do
           Success $ ExternalIsaWithPathEvent ExternalIsaWithPath
             { callId = 123
+            , baseTag = "Baz"
+            , classTag = "Integer"
+            , path = [StringLit "bar"]
             }
 
       it "can decode ExternalCall" do
@@ -419,6 +430,17 @@ main = hspec do
             _ :> Left e -> throw e
 
             _ -> expectationFailure "Expected one result"
+
+        xit "handles ExternalIsaWithPath" \polar -> do
+          expect =<< polarLoad polar [[s| 
+            f(x: Integer) if x = 0;
+            g(x: Baz) if f(x.bar.foo.num);
+            h(x: Bar) if f(x.num);
+          |]]
+
+          $( shouldMatch
+               [e| S.toList (runQueryString polar "g(x)") |]
+               [p| [QueryResult{}] :> Right True |] )
 
   describe "Examples" do
     before polarNew do

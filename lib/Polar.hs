@@ -481,14 +481,21 @@ instance FromJSON ExternalIsa where
 
 
 data ExternalIsaWithPath = ExternalIsaWithPath
-  { callId :: Word64 }
+  { callId :: Word64 
+  , baseTag :: String
+  , path :: [PolarTerm]
+  , classTag :: String
+  }
   deriving stock (Eq, Show)
 
 
 instance FromJSON ExternalIsaWithPath where
   parseJSON = withObject "ExternalIsaWithPath" \o -> do
     callId <- o .: "call_id"
-    return ExternalIsaWithPath{ callId }
+    baseTag <- o .: "base_tag"
+    path <- o .: "path"
+    classTag <- o .: "class_tag"
+    return ExternalIsaWithPath{ callId, baseTag, path, classTag }
 
 
 data ExternalIsSubclass = ExternalIsSubclass
@@ -732,6 +739,8 @@ unfoldQuery env q = S.unfoldr go env where
 
                 Left e ->
                   fail $ "Could not construct: " <> e <> show args
+
+        x -> fail $ show x <> " is not handled"
 
 
 decodePolarError :: String -> PolarError
