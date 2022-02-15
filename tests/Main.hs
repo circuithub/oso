@@ -75,7 +75,7 @@ import Polar
   , rule
   , runQuery
   , runQueryString
-  , unfoldQuery, QueryResult (QueryResult, bindings)
+  , unfoldQuery, QueryResult (QueryResult, bindings), kwargs
   )
 import ShouldMatch ( shouldMatch )
 
@@ -143,8 +143,16 @@ main = hspec do
 
       describe "Call" do
         jsonSpec
-          (CallTerm Call{name = "allow", args = [BoolLit True]})
-          [aesonQQ|{"value":{"Call":{"name":"allow", "args":[{"value":{"Bool":true}}]}}}|]
+          (CallTerm Call{name = "allow", args = [BoolLit True], kwargs = Nothing})
+          [aesonQQ|{
+            "value":{
+              "Call":{
+                "name":"allow", 
+                "args":[{"value":{"Bool":true}}], 
+                "kwargs":null
+              }
+            }
+          }|]
 
     describe "QueryEvent" do
       it "can decode Done" do
@@ -355,6 +363,16 @@ main = hspec do
           $( shouldMatch
                [e| S.toList_ (runQueryString polar "named(new Organization(\"Not foo\"))") |]
                [p| [] |] )
+
+        it "can create external instances with named arguments" \polar -> do
+          expect =<< registerType @Organization polar
+
+          S.toList_ (runQueryString polar "new Organization(name: \"test\") = x") >>= \case
+            [result] -> 
+              getResultVariable result "x" `shouldBe`
+                Just Organization{ name = "test" }
+
+            _ -> expectationFailure "Expected one result"
 
   describe "Examples" do
     before polarNew do

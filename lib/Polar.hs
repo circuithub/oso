@@ -3,7 +3,6 @@
 {-# language DataKinds #-}
 {-# language DeriveAnyClass #-}
 {-# language DeriveGeneric #-}
-{-# language DerivingStrategies #-}
 {-# language DuplicateRecordFields #-}
 {-# language FlexibleContexts #-}
 {-# language FlexibleInstances #-}
@@ -22,6 +21,7 @@
 {-# options_ghc -Wno-unrecognised-pragmas #-}
 
 {-# HLINT ignore "Avoid lambda" #-}
+{-# LANGUAGE DerivingVia #-}
 
 module Polar where
 
@@ -45,7 +45,7 @@ import Control.Exception ( Exception, finally )
 import Control.Monad.IO.Class ( liftIO )
 import Data.Bool ( bool )
 import Data.Data ( Proxy( Proxy ) )
-import Data.Foldable ( msum, toList )
+import Data.Foldable ( msum, toList, fold )
 import Data.Functor ( (<&>) )
 import Data.IORef ( IORef, atomicModifyIORef, newIORef, readIORef )
 import Data.Type.Equality ( (:~:)( Refl ), testEquality )
@@ -54,7 +54,7 @@ import Foreign.C ( CChar, peekCString, withCString )
 import Foreign.ForeignPtr ( ForeignPtr, newForeignPtr, withForeignPtr )
 import Foreign.Ptr ( Ptr, castPtr, nullPtr )
 import Foreign.Storable ( peekByteOff, sizeOf )
-import GHC.Generics ( C1, D1, Generic, K1( K1 ), M1( M1 ), Meta( MetaSel ), Rec0, Rep, S1, type (:*:)( (:*:) ), from, to )
+import GHC.Generics ( C1, D1, Generic, K1( K1 ), M1( M1 ), Meta( MetaSel ), Rec0, Rep, S1, type (:*:)( (:*:) ), from, to, U1 (U1) )
 import GHC.TypeLits ( KnownSymbol, symbolVal )
 import Type.Reflection ( SomeTypeRep( SomeTypeRep ), Typeable, typeOf, typeRep )
 
@@ -388,6 +388,7 @@ instance FromJSON ExternalInstance where
 data Call = Call
   { name :: String
   , args :: [PolarTerm]
+  , kwargs :: Maybe (Map String PolarTerm)
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (ToJSON, FromJSON)
@@ -694,23 +695,26 @@ unfoldQuery env q = S.unfoldr go env where
             Left e -> pure $ Left $ Left e
             Right () -> go env
 
-        MakeExternalEvent MakeExternal{ instanceId, constructor = CallTerm Call{ name = constructorName, args } } -> do
+        MakeExternalEvent MakeExternal{ instanceId, constructor = CallTerm Call{ name = constructorName, args, kwargs } } -> do
           somePolarType <- case Map.lookup constructorName (types env) of
             Nothing -> fail "Could not find constructor"
             Just x -> return x
 
           case somePolarType of
             SomePolarType p -> do
-              let mk :: forall t. PolarValue t => Proxy t -> Maybe t
-                  mk _ = construct @t env args
+              let mk :: forall t. PolarValue t => Proxy t -> Either String t
+                  mk _ = construct @t env ConstructorArguments
+                    { positionalArguments = args
+                    , namedArguments = fold kwargs 
+                    }
 
               case mk p of
-                Just a -> do
+                Right a -> do
                   let env' = env { instanceMap = Map.insert instanceId (Instance a) (instanceMap env) }
                   go env'
 
-                Nothing ->
-                  fail "Could not construct"
+                Left e ->
+                  fail $ "Could not construct: " <> e <> show args
 
 
 decodePolarError :: String -> PolarError
@@ -758,6 +762,12 @@ checkResultString io = do
      else Left . decodePolarError <$> peekCString errorPtr
 
 
+data ConstructorArguments = ConstructorArguments
+  { positionalArguments :: [PolarTerm]
+  , namedArguments :: Map String PolarTerm
+  }
+
+
 -- | Types that can be used in Polar rules.
 class (Eq a, Typeable a) => PolarValue a where
   -- | Convert a Haskell value to a Polar term. Typically this will be
@@ -776,7 +786,7 @@ class (Eq a, Typeable a) => PolarValue a where
 
   classTagOf :: a -> String
 
-  construct :: Environment -> [PolarTerm] -> Maybe a
+  construct :: Environment -> ConstructorArguments -> Either String a
 
 
 instance PolarValue a => PolarValue [a] where
@@ -788,7 +798,8 @@ instance PolarValue a => PolarValue [a] where
 
   call _ _ _ = Nothing
   classTagOf _ = "?"
-  construct _ _ = Nothing
+
+  construct _ _ = Left "Cannot construct lists"
 
 
 instance PolarValue Text where
@@ -800,7 +811,8 @@ instance PolarValue Text where
 
   call _ _ _ = Nothing
   classTagOf _ = "String"
-  construct _ _ = Nothing
+
+  construct _ _ = Left "Cannot construct Text"
 
 
 class Rule arg res where
@@ -818,19 +830,12 @@ instance (PolarValue arg, Rule args res) => Rule arg (args -> res) where
 rule :: Rule args result => String -> args -> result
 rule name = applyArgument \args -> do
   terms <- sequence args
-  return $ CallTerm Call{ name, args = terms }
+  return $ CallTerm Call{ name, args = terms, kwargs = Nothing }
 
 
 data RegisteredType = RegisteredType
-  deriving stock (Eq, Show)
-
-
-instance PolarValue RegisteredType where
-  toPolarTerm = externalInstance
-
-  call _ _ _ = Nothing
-  classTagOf RegisteredType = "RegisteredType"
-  construct _ _ = Nothing
+  deriving stock (Eq, Generic, Show)
+  deriving PolarValue via GenericPolarRecord RegisteredType
 
 
 registerType :: forall a. PolarValue a => Polar -> IO (Either PolarError ())
@@ -883,7 +888,7 @@ instance (GPolarFields (Rep a), Generic a, Eq a, Typeable a, Show a) => PolarVal
 class GPolarFields f where
   gcall :: f x -> String -> [PolarTerm] -> Maybe (State Environment PolarTerm)
 
-  gconstruct :: Environment -> [PolarTerm] -> Maybe (f x, [PolarTerm])
+  gconstruct :: Environment -> ConstructorArguments -> Either String (f x, ConstructorArguments)
 
 
 instance GPolarFields f => GPolarFields (D1 m f) where
@@ -911,10 +916,26 @@ instance (KnownSymbol name, PolarValue x) => GPolarFields (S1 ('MetaSel ('Just n
   gcall (M1 (K1 a)) n [] | n == symbolVal (Proxy @name) = Just $ toPolarTerm a
   gcall (M1 _) _ _  = Nothing
 
-  gconstruct e = \case
-    x:xs -> 
-      case fromPolarTerm e x of
-        Just y -> Just (M1 (K1 y), xs)
-        _      -> Nothing
+  gconstruct e args@ConstructorArguments{ positionalArguments, namedArguments } 
+    | x:xs <- positionalArguments =
+        case fromPolarTerm e x of
+          Just y -> pure (M1 (K1 y), args{ positionalArguments = xs })
+          _      -> Left $ "Could not marshal argument for " <> symbolVal (Proxy @name)
 
-    _ -> Nothing
+    | null namedArguments =
+        Left $ "Empty argument list encountered at " <> symbolVal (Proxy @name)
+
+    | Just x <- Map.lookup (symbolVal (Proxy @name)) namedArguments =
+        case fromPolarTerm e x of
+          Just y -> pure (M1 (K1 y), args{ namedArguments = Map.delete (symbolVal (Proxy @name)) namedArguments })
+          _      -> Left $ "Could not marshal argument for " <> symbolVal (Proxy @name)
+  
+    | otherwise =
+        Left $ "Could not find named argument for " <> symbolVal (Proxy @name)
+        
+
+
+instance GPolarFields U1 where
+  gcall _ _ _ = Nothing
+
+  gconstruct _ args = pure (U1, args)
