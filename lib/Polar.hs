@@ -29,6 +29,7 @@ module Polar where
 import Data.Aeson
   ( FromJSON( parseJSON )
   , ToJSON( toJSON )
+  , Value( String, Number )
   , (.:)
   , eitherDecodeStrict'
   , withObject
@@ -65,6 +66,9 @@ import qualified Data.Map.Strict as Map
 -- oso
 import qualified Polar.C as C
 import qualified Polar.C.Types as C
+
+-- scientific
+import Data.Scientific ( fromFloatDigits )
 
 -- streaming
 import Data.Functor.Of ( Of )
@@ -155,7 +159,7 @@ instance FromJSON PolarValidationError where
     ]
 
 
-data PolarRuntimeError 
+data PolarRuntimeError
   = ApplicationError String String PolarTerm
   | QueryForUndefinedRule String
   deriving stock (Eq, Show)
@@ -308,6 +312,7 @@ data PolarTerm
   = StringLit Text
   | BoolLit Bool
   | ListLit [PolarTerm]
+  | DoubleLit Double
   | ExpressionTerm Expression
   | Variable String
   | ExternalInstanceTerm ExternalInstance
@@ -327,8 +332,15 @@ instance FromJSON PolarTerm where
         , ExternalInstanceTerm <$> o .: "ExternalInstance"
         , ListLit <$> o .: "List"
         , CallTerm <$> o .: "Call"
-        , o .: "Number" >>= withObject "Number" \o ->
-            IntegerLit <$> o .: "Integer"
+        , o .: "Number" >>= withObject "Number" \o -> msum
+            [ IntegerLit <$> o .: "Integer"
+            , DoubleLit <$> o .: "Float"
+            , o .: "Float" >>= withText "Float" \case
+                "Infinity"  -> pure $ DoubleLit (1/0)
+                "-Infinity" -> pure $ DoubleLit (-1/0)
+                "NaN"       -> pure $ DoubleLit (0/0)
+                _           -> empty
+            ]
         ]
 
 
@@ -343,7 +355,12 @@ instance ToJSON PolarTerm where
       ListLit terms -> [aesonQQ| {"List": #{terms}} |]
       BoolLit b -> [aesonQQ| {"Bool": #{b}} |]
       IntegerLit x -> [aesonQQ| {"Number": {"Integer": #{x}}} |]
-
+      DoubleLit x -> [aesonQQ| {"Number": {"Float": #{y}}} |]
+        where
+          y | isNaN x   = String "NaN"
+            | x == 1/0  = String "Infinity"
+            | x == -1/0 = String "-Infinity"
+            | otherwise = Number $ fromFloatDigits x
 
 data Expression = Expression
   { operator :: String
@@ -551,7 +568,7 @@ instance Eq SomePolarType where
 
 instance Show SomePolarType where
   show (SomePolarType p) = go p
-    where 
+    where
       go :: forall a. PolarValue a => Proxy a -> String
       go _ = show $ typeRep @a
 
@@ -672,7 +689,7 @@ unfoldQuery env q = S.unfoldr go env where
             Nothing  -> do
               polarApplicationError q ("Cannot access " <> attribute) >>= \case
                 Left e -> pure $ Left $ Left e
-                Right () -> 
+                Right () ->
                   polarCallResult q callId (StringLit "null") >>= \case
                     Left e -> pure $ Left $ Left e
                     Right () -> go env
@@ -705,7 +722,7 @@ unfoldQuery env q = S.unfoldr go env where
               let mk :: forall t. PolarValue t => Proxy t -> Either String t
                   mk _ = construct @t env ConstructorArguments
                     { positionalArguments = args
-                    , namedArguments = fold kwargs 
+                    , namedArguments = fold kwargs
                     }
 
               case mk p of
@@ -778,7 +795,7 @@ class (Eq a, Typeable a) => PolarValue a where
 
   -- | Handle attribute access or method calls. If the given value doesn't
   -- support a method or attribute, 'Nothing' can be returned.
-  call 
+  call
     :: a -- ^ The value to operate on.
     -> String -- ^ The name of the attribute or method to access.
     -> [PolarTerm] -- ^ Any arguments for the call (an empty list for attributes).
@@ -876,7 +893,7 @@ instance (GPolarFields (Rep a), Generic a, Eq a, Typeable a, Show a) => PolarVal
 
   fromPolarTerm e = \case
     ExternalInstanceTerm ExternalInstance{ instanceId } -> do
-      Instance{ value } <- Map.lookup instanceId (instanceMap e) 
+      Instance{ value } <- Map.lookup instanceId (instanceMap e)
       GenericPolarRecord <$> cast value
       where
         cast :: forall x. PolarValue x => x -> Maybe a
@@ -916,7 +933,7 @@ instance (KnownSymbol name, PolarValue x) => GPolarFields (S1 ('MetaSel ('Just n
   gcall (M1 (K1 a)) n [] | n == symbolVal (Proxy @name) = Just $ toPolarTerm a
   gcall (M1 _) _ _  = Nothing
 
-  gconstruct e args@ConstructorArguments{ positionalArguments, namedArguments } 
+  gconstruct e args@ConstructorArguments{ positionalArguments, namedArguments }
     | x:xs <- positionalArguments =
         case fromPolarTerm e x of
           Just y -> pure (M1 (K1 y), args{ positionalArguments = xs })
@@ -929,10 +946,10 @@ instance (KnownSymbol name, PolarValue x) => GPolarFields (S1 ('MetaSel ('Just n
         case fromPolarTerm e x of
           Just y -> pure (M1 (K1 y), args{ namedArguments = Map.delete (symbolVal (Proxy @name)) namedArguments })
           _      -> Left $ "Could not marshal argument for " <> symbolVal (Proxy @name)
-  
+
     | otherwise =
         Left $ "Could not find named argument for " <> symbolVal (Proxy @name)
-        
+
 
 
 instance GPolarFields U1 where

@@ -36,6 +36,7 @@ import Test.Hspec
   , it
   , shouldBe
   , shouldReturn
+  , shouldSatisfy
   , xdescribe, xit
   )
 
@@ -56,7 +57,7 @@ import Polar
   , PolarErrorKind( ParseError, RuntimeError )
   , PolarRuntimeError( ApplicationError, QueryForUndefinedRule )
   , PolarParseError( UnrecognizedEOF )
-  , PolarTerm( BoolLit, StringLit, ListLit, ExpressionTerm, Variable, ExternalInstanceTerm, CallTerm, IntegerLit )
+  , PolarTerm( BoolLit, StringLit, ListLit, ExpressionTerm, Variable, ExternalInstanceTerm, CallTerm, IntegerLit, DoubleLit )
   , PolarValue
   , QueryEvent( ResultEvent, DoneEvent, ExternalIsaEvent, ExternalIsSubclassEvent, ExternalIsaWithPathEvent, ExternalCallEvent, ExternalOpEvent )
   , Result( Result, bindings, trace )
@@ -116,6 +117,33 @@ main = hspec do
           (BoolLit True)
           [aesonQQ|{"value":{"Bool":true}}|]
 
+      describe "DoubleLit" do
+        describe "Real numbers" do
+          jsonSpec
+            (DoubleLit 3.14)
+            [aesonQQ|{"value":{"Number":{"Float":3.14}}}|]
+
+        describe "Infinity" do
+          jsonSpec
+            (DoubleLit (1/0))
+            [aesonQQ|{"value":{"Number":{"Float":"Infinity"}}}|]
+
+        describe "-Infinity" do
+          jsonSpec
+            (DoubleLit (-1/0))
+            [aesonQQ|{"value":{"Number":{"Float":"-Infinity"}}}|]
+
+        describe "NaN" do
+          let json = [aesonQQ|{"value":{"Number":{"Float":"NaN"}}}|]
+
+          it "can decode JSON" do
+            fromJSON json `shouldSatisfy` \case
+              Success (DoubleLit x) -> isNaN x
+              _                     -> False
+
+          it "can encode JSON" do
+            toJSON (DoubleLit (0/0)) `shouldBe` json
+
       describe "IntegerLit" do
         jsonSpec
           (IntegerLit 123)
@@ -147,8 +175,8 @@ main = hspec do
           [aesonQQ|{
             "value":{
               "Call":{
-                "name":"allow", 
-                "args":[{"value":{"Bool":true}}], 
+                "name":"allow",
+                "args":[{"value":{"Bool":true}}],
                 "kwargs":null
               }
             }
@@ -306,7 +334,7 @@ main = hspec do
             result <- expect =<< polarNextQueryEvent query
 
             case result of
-              ResultEvent Result{ bindings } -> 
+              ResultEvent Result{ bindings } ->
                 bindings `shouldBe` Map.singleton "x" (IntegerLit 1)
 
               _ -> expectationFailure "Expected a result"
@@ -323,7 +351,7 @@ main = hspec do
           $( shouldMatch
                [e| S.toList $ runQuery polar (rule "test" user) |]
                [p| [QueryResult{}] :> Right True |] )
-               
+
           $( shouldMatch
                [e| S.toList $ runQuery polar (rule "test" org) |]
                [p| [] :> Right True |] )
@@ -341,7 +369,7 @@ main = hspec do
           expect =<< registerType @Organization polar
 
           S.toList_ (runQueryString polar "new Organization(\"test\") = x") >>= \case
-            [result] -> 
+            [result] ->
               getResultVariable result "x" `shouldBe`
                 Just (Organization "test")
 
@@ -377,7 +405,7 @@ main = hspec do
           expect =<< registerType @Organization polar
 
           S.toList_ (runQueryString polar "new Organization(name: \"test\") = x") >>= \case
-            [result] -> 
+            [result] ->
               getResultVariable result "x" `shouldBe`
                 Just Organization{ name = "test" }
 
@@ -385,7 +413,7 @@ main = hspec do
 
         xit "pre-registers a type for nil" \polar -> do
           S.toList (runQueryString polar "nil = x") >>= \case
-            [result] :> Right True -> 
+            [result] :> Right True ->
               fail $ show result
 
             _ :> Left e -> throw e
@@ -447,7 +475,7 @@ main = hspec do
         query <- expect =<< polarNewQuery polar [s| grandfather("Asclepius", grandpa) |] False
 
         S.toList_ (unfoldQuery emptyEnvironment query) >>= \case
-          [ QueryResult{ bindings } ] -> 
+          [ QueryResult{ bindings } ] ->
               bindings `shouldBe` Map.singleton "grandpa" (StringLit "Zeus")
 
           _ -> expectationFailure "Expected one query result"
@@ -518,7 +546,7 @@ main = hspec do
 
               return polar
 
-        -- "Import" the rule from Polar, creating a Haskell function to create 
+        -- "Import" the rule from Polar, creating a Haskell function to create
         -- queries.
         let allow :: (PolarValue a, PolarValue b) => a -> Text -> b -> State Environment PolarTerm
             allow = rule "allow"
@@ -580,4 +608,3 @@ newtype Organization = Organization
 
 expect :: Exception e => Either e a -> IO a
 expect = either throw return
-
